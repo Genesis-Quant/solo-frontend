@@ -1,0 +1,179 @@
+:root {
+  color-scheme: light;
+  --radius: 0.5rem;
+  --bg: #f5f7fb;
+  --panel: oklch(1 0 0);
+  --panel-solid: oklch(1 0 0);
+  --panel-soft: #f7f9fd;
+  --text: #17243a;
+  --muted: #5d6d85;
+  --line: oklch(0.922 0 0 / 65%);
+  --line-strong: #dfe6f0;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --accent-foreground: oklch(0.985 0 0);
+  --signal-blue: oklch(0.588 0.158 241.966);
+  --danger: oklch(0.577 0.245 27.325);
+  --control-secondary: #f1f5fb;
+  --control-accent: #edf3ff;
+  --control-input: #dfe6f0;
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --field-bg: transparent;
+  --panel-shadow: 0 1px 2px rgb(0 0 0 / 5%);
+  --scrollbar-thumb: color-mix(in oklch, var(--muted) 28%, transparent);
+  --scrollbar-thumb-hover: color-mix(in oklch, var(--muted) 42%, transparent);
+  --font-display: "Iowan Old Style", "Palatino Linotype", "Noto Serif SC", serif;
+  --font-body: Aptos, "Microsoft YaHei UI", "Noto Sans SC", sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0b1120;
+  --panel: #111b2e;
+  --panel-solid: #111b2e;
+  --panel-soft: #152238;
+  --text: #e5ecf6;
+  --muted: #a2b0c4;
+  --line: oklch(1 0 0 / 6%);
+  --line-strong: #28384f;
+  --accent: #79a8ff;
+  --accent-strong: #a8c6ff;
+  --accent-foreground: #0b1120;
+  --signal-blue: oklch(0.746 0.16 232.661);
+  --danger: oklch(0.704 0.191 22.216);
+  --control-secondary: #1a2940;
+  --control-accent: #1c3153;
+  --control-input: #28384f;
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.69 0.16 155);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+  --field-bg: oklch(1 0 0 / 3%);
+  --panel-shadow: 0 1px 2px rgb(0 0 0 / 25%);
+}
+
+* {
+  box-sizing: border-box;
+  border-color: var(--line-strong);
+  outline-color: color-mix(in oklch, var(--accent) 50%, transparent);
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+// Tabs retain horizontal scrolling for wheel, touch and arrow controls while
+// suppressing the browser-native scrollbar in every supported engine.
+.tabs-scroll-viewport {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.tabs-scroll-viewport::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+html {
+  min-width: 320px;
+  min-height: 100%;
+  scroll-behavior: smooth;
+  background: var(--bg);
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  overflow-x: hidden;
+  background: var(--bg);
+}
+
+#root {
+  min-height: 100vh;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background: color-mix(in oklch, var(--accent) 22%, transparent);
+}
+
+.display-type {
+  font-family: var(--font-display);
+}
+
+.numeric {
+  font-variant-numeric: tabular-nums;
+}
+
+:root,
+:root[data-theme="dark"] {
+  --sidebar: var(--panel);
+  --sidebar-foreground: var(--muted);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: var(--accent-foreground);
+  --sidebar-accent: var(--control-accent);
+  --sidebar-accent-foreground: var(--accent);
+  --sidebar-border: var(--line-strong);
+  --sidebar-ring: var(--accent);
+}
+
+.status-badge[data-status="success"] {
+  color: #167450;
+  background: #ebf8f1;
+  border-color: transparent;
+}
+
+.status-badge[data-status="running"] {
+  color: var(--accent);
+  background: var(--control-accent);
+  border-color: transparent;
+}
+
+.status-badge[data-status="failed"] {
+  color: #b42335;
+  background: #fff0f1;
+  border-color: transparent;
+}
+
+:root[data-theme="dark"] .status-badge[data-status="success"] {
+  color: #7bdfb5;
+  background: #12392f;
+}
+
+:root[data-theme="dark"] .status-badge[data-status="failed"] {
+  color: #ff9aa5;
+  background: #442530;
+}

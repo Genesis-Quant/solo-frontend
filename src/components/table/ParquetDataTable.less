@@ -1,0 +1,47 @@
+.parquet-data-table {
+  transition: width 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.parquet-column-cell {
+  overflow: hidden;
+  transition:
+    width 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    min-width 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    max-width 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    padding-inline 200ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 140ms ease;
+}
+
+.parquet-column-cell[data-column-animation="entering"] {
+  animation: parquet-column-enter 200ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.parquet-column-cell[data-column-animation="exiting"] {
+  width: 0 !important;
+  min-width: 0 !important;
+  max-width: 0 !important;
+  padding-inline: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
+@keyframes parquet-column-enter {
+  from {
+    width: 0;
+    min-width: 0;
+    max-width: 0;
+    padding-inline: 0;
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .parquet-data-table,
+  .parquet-column-cell {
+    transition: none;
+  }
+
+  .parquet-column-cell[data-column-animation="entering"] {
+    animation: none;
+  }
+}
