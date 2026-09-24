@@ -82,6 +82,7 @@ export const initialProjects: ResearchProject[] = Object.entries(names).flatMap(
       const versions: ResearchVersion[] = [12, 11, 10].map(
         (number, offset) => ({
           id: `${id}-v${number}`,
+          reportFixture: true,
           number,
           note:
             offset === 0
@@ -115,7 +116,8 @@ export const initialProjects: ResearchProject[] = Object.entries(names).flatMap(
         kind,
         name,
         description: descriptions[kind][index],
-        template: "稳定版 · v1.0.0",
+        schemeVersion: "v1.0.0",
+        algoVersion: "v1.0.0",
         updatedAt: versions[0].submittedAt,
         archived: false,
         versions

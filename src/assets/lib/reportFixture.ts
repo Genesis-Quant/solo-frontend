@@ -1,4 +1,3 @@
-import type { BacktestTableName } from "@/assets/lib/backtestAnalysis";
 import type { FactorReportParameters } from "@/types/factor";
 
 export const factorFixtureParameters: FactorReportParameters = {
@@ -22,19 +21,3 @@ export const reportOutputs = {
 export function reportFixtureUrl(kind: keyof typeof reportOutputs, name: string): string {
   return `${import.meta.env.BASE_URL}reports/${kind}/${name}.parquet`;
 }
-
-async function readFixture(kind: keyof typeof reportOutputs, name: string): Promise<ArrayBuffer> {
-  const response = await fetch(reportFixtureUrl(kind, name));
-  if (!response.ok) throw new Error(`示例报告加载失败：${name} (${response.status})`);
-  return response.arrayBuffer();
-}
-
-// Match Arena's report data interface; every prototype version uses the same fixed files.
-export const factorApi = {
-  outputs: async () => factorOutputs.map((name) => ({ name })),
-  output: (_workflowInstanceId: number, name: typeof factorOutputs[number]) => readFixture("factor", name)
-};
-
-export const backtestApi = {
-  output: (_workflowInstanceId: number, name: BacktestTableName) => readFixture("backtest", name)
-};

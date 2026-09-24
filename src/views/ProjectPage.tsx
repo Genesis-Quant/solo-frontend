@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft,
   ArrowUpRight,
@@ -18,12 +18,12 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import {
   defaultDownstream,
-  jupyterUrl,
   stepState
 } from "@/assets/lib/prototype";
+import { apiUrl } from "@/assets/lib/settings";
 import ProjectForm from "@/components/ProjectForm";
-import FixedReport from "@/components/panel/FixedReport";
-import { reportFixtureUrl, reportOutputs } from "@/assets/lib/reportFixture";
+import ResearchReport from "@/components/panel/ResearchReport";
+import { loadReport, type ReportData } from "@/assets/lib/reports";
 import TaskLogDialog from "@/components/TaskLogDialog";
 import { useResearchStore } from "@/store/research";
 import {
@@ -83,7 +83,7 @@ export default function ProjectPage() {
     project.versions[0];
   return (
     <ProjectDetail
-      key={project.id}
+      key={`${project.id}:${version?.id}`}
       project={project}
       version={version}
       selectVersion={(id) =>
@@ -104,6 +104,18 @@ function ProjectDetail({
 }) {
   const [editing, setEditing] = useState(false);
   const [logs, setLogs] = useState<TaskStep | null>(null);
+  const [report, setReport] = useState<ReportData | null>(null);
+  const [reportError, setReportError] = useState("");
+  useEffect(() => {
+    if (version?.status !== "success") return;
+    const controller = new AbortController();
+    setReport(null);
+    setReportError("");
+    loadReport(version, project.kind, controller.signal)
+      .then((data) => { if (!controller.signal.aborted) setReport(data); })
+      .catch((error: Error) => { if (!controller.signal.aborted) setReportError(error.message); });
+    return () => controller.abort();
+  }, [version, project.kind]);
   function changeVersion(id: string) {
     selectVersion(id);
   }
@@ -230,9 +242,9 @@ function ProjectDetail({
                         <FileChartColumn className="size-4 text-muted-foreground" />
                         报告数据
                       </h2>
-                      {reportOutputs[project.kind === "factor" ? "factor" : "backtest"].map((name) => (
+                      {Object.entries(report?.files ?? {}).map(([name, url]) => (
                         <Button key={name} asChild variant="link" className="h-auto max-w-full justify-start p-0 text-xs">
-                          <a className="break-all whitespace-normal font-mono" href={reportFixtureUrl(project.kind === "factor" ? "factor" : "backtest", name)} download>
+                          <a className="break-all whitespace-normal font-mono" href={url} download>
                             {name}.parquet
                           </a>
                         </Button>
@@ -288,10 +300,10 @@ function ProjectDetail({
           <h2 className="text-base font-semibold">
             {kindLabels[project.kind]}
             {!version || version.status === "success" ? "报告" : "执行状态"}
-            {version?.status === "success" && <Badge variant="secondary" className="ml-2 font-normal">固定示例</Badge>}
+            {version?.status === "success" && version.reportFixture && !version.reportPath && <Badge variant="secondary" className="ml-2 font-normal">固定示例</Badge>}
           </h2>
           <Button asChild variant="outline" className="bg-card">
-            <a href={jupyterUrl(project)} target="_blank" rel="noreferrer">
+            <a href={`${apiUrl}/projects/${project.id}/jupyter`} target="_blank" rel="noreferrer">
               打开 Jupyter
               <ArrowUpRight />
             </a>
@@ -299,7 +311,9 @@ function ProjectDetail({
         </div>
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         {version?.status === "success"
-? <FixedReport kind={project.kind} />
+? reportError
+  ? <Alert variant="destructive"><AlertDescription>{reportError}</AlertDescription></Alert>
+  : report ? <ResearchReport report={report} workflowId={version.workflowId} /> : <p className="text-muted-foreground">加载报告…</p>
 : !version
 ? (
           <Empty className="min-h-72 border bg-card">
@@ -596,7 +610,7 @@ function VersionSummary({ project, version, changeVersion }: { project: Research
               </p>
               <Badge variant="outline">未提交</Badge>
               <p className="text-xs text-muted-foreground">
-                模板 {project.template}
+                Scheme {project.schemeVersion ?? "未记录"} · Algo {project.algoVersion}
               </p>
             </>
           )}

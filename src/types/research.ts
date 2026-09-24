@@ -10,6 +10,12 @@ export type RunStatus = "success" | "running" | "failed";
 export type PublishStatus = "unpublished" | "checking" | "published" | "failed";
 export type TaskStep = "environment" | "research" | "report";
 
+export interface TemplateVersion {
+  tag: string;
+  commit: string;
+  version?: string | null;
+}
+
 export interface ResearchVersion {
   id: string;
   number: number;
@@ -21,6 +27,8 @@ export interface ResearchVersion {
   duration: string;
   error?: string;
   publishError?: string;
+  reportPath?: string;
+  reportFixture?: boolean;
   parameters: Record<string, string>;
   dependencies: { name: string; version: string }[];
 }
@@ -30,7 +38,11 @@ export interface ResearchProject {
   name: string;
   description: string;
   kind: ProjectKind;
-  template: string;
+  schemeVersion: string | null;
+  schemeCommit?: string | null;
+  algoVersion: string;
+  algoCommit?: string;
+  directory?: string;
   updatedAt: string;
   archived: boolean;
   versions: ResearchVersion[];

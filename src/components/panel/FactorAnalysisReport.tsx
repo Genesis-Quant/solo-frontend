@@ -9,7 +9,7 @@ import {
 import IconDatabase from "~icons/lucide/database";
 import IconLoaderCircle from "~icons/lucide/loader-circle";
 
-import { factorApi } from "@/assets/lib/reportFixture";
+import { useReportApi } from "@/assets/lib/reports";
 import { chartRange, formatAxisLabel, thresholdMarkLine } from "@/assets/lib/chart";
 import { errorMessage } from "@/assets/lib/utils";
 import {
@@ -51,6 +51,7 @@ type FactorAnalysisReportProps = {
 
 type IcType = "RankIC" | "IC";
 export default function FactorAnalysisReport({ chartRanges, factor, onChartRanges, parameters, workflowInstanceId }: FactorAnalysisReportProps) {
+  const factorApi = useReportApi();
   const theme = useAppStore((state) => state.theme);
   const analytics = useRef<FactorAnalytics | null>(null);
   const factorColumnsKey = parameters.factor_columns.join("\u0001");
@@ -144,7 +145,7 @@ export default function FactorAnalysisReport({ chartRanges, factor, onChartRange
       if (analytics.current === session) analytics.current = null;
       session?.close().catch(() => undefined);
     };
-  }, [factorColumnsKey, parameters.n_groups, parameters.n_select, returnColumnsKey, returnSpecsKey, workflowInstanceId]);
+  }, [factorApi, factorColumnsKey, parameters.n_groups, parameters.n_select, returnColumnsKey, returnSpecsKey, workflowInstanceId]);
 
   useEffect(() => {
     const session = analytics.current;

@@ -2,7 +2,7 @@ import { Loader2 } from "lucide-react";
 import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { max as statisticsMax, mean as statisticsMean, sum } from "simple-statistics";
 
-import { backtestApi } from "@/assets/lib/reportFixture";
+import { useReportApi } from "@/assets/lib/reports";
 import { BacktestAnalytics, backtestTableTimeColumns, type BacktestTableName, type BacktestTablePage, type PortfolioPoint } from "@/assets/lib/backtestAnalysis";
 import { backtestTableConfigs } from "@/assets/lib/backtestTable";
 import { chartRange, chartRangeIncluding, formatAxisLabel, thresholdMarkLine } from "@/assets/lib/chart";
@@ -39,6 +39,7 @@ type BacktestReportProps = {
 };
 
 export default function BacktestReport({ activeTab, annualTradingDays, chartRanges, onActiveTabChange, onChartRanges, riskFreeRate, showTabs = true, workflowInstanceId }: BacktestReportProps) {
+  const backtestApi = useReportApi();
   const theme = useAppStore((state) => state.theme);
   const analytics = useRef<BacktestAnalytics | null>(null);
   const [localTab, setLocalTab] = useState("overview");
@@ -82,7 +83,7 @@ export default function BacktestReport({ activeTab, annualTradingDays, chartRang
       .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; const instance = analytics.current; analytics.current = null; instance?.close(); };
-  }, [workflowInstanceId]);
+  }, [backtestApi, workflowInstanceId]);
 
   useEffect(() => {
     const activeInstance = analytics.current;
@@ -100,7 +101,7 @@ export default function BacktestReport({ activeTab, annualTradingDays, chartRang
     }
     loadTable().catch((reason) => { if (!cancelled) { setTableError(reason instanceof Error ? reason.message : String(reason)); setTableLoadedKey(requestKey); } }).finally(() => { if (!cancelled) setTableLoading(false); });
     return () => { cancelled = true; };
-  }, [endDate, error, loading, startDate, tableName, tablePage, tablePageSize, tableQuery, tableRequestKey, workflowInstanceId]);
+  }, [backtestApi, endDate, error, loading, startDate, tableName, tablePage, tablePageSize, tableQuery, tableRequestKey, workflowInstanceId]);
 
   const selectedPortfolio = useMemo(() => portfolio.filter((row) => (!startDate || row.time >= startDate) && (!endDate || row.time <= endDate)), [endDate, portfolio, startDate]);
   const rangePoints = useMemo(() => portfolio.map((row) => ({ time: row.time, value: row.dailyReturn })), [portfolio]);

@@ -11,6 +11,7 @@ import {
 import { Link } from "react-router-dom";
 
 import ProjectForm from "@/components/ProjectForm";
+import { Alert, AlertDescription } from "@/ui/alert";
 import { useResearchStore } from "@/store/research";
 import {
   kindLabels,
@@ -71,6 +72,8 @@ export default function ProjectsPage({ kind }: { kind: ProjectKind }) {
   const [status, setStatus] = useState("all");
   const [form, setForm] = useState<ResearchProject | "new" | null>(null);
   const [deleting, setDeleting] = useState<ResearchProject | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+  const [removing, setRemoving] = useState(false);
   const filtered = projects.filter(
     (p) =>
       `${p.name} ${p.description}`
@@ -116,6 +119,7 @@ export default function ProjectsPage({ kind }: { kind: ProjectKind }) {
           </SelectContent>
         </Select>
       </div>
+      {deleteError && <Alert variant="destructive"><AlertDescription>{deleteError}</AlertDescription></Alert>}
       <div className="overflow-hidden rounded-lg border bg-card">
         <Table>
           <TableHeader>
@@ -274,9 +278,19 @@ export default function ProjectsPage({ kind }: { kind: ProjectKind }) {
             <AlertDialogCancel>取消</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-white hover:bg-destructive/90"
-              onClick={() => {
-                if (deleting) remove(deleting.id);
-                setDeleting(null);
+              disabled={removing}
+              onClick={async (event) => {
+                event.preventDefault();
+                if (!deleting || removing) return;
+                setRemoving(true);
+                setDeleteError("");
+                try {
+                  await remove(deleting.id);
+                  setDeleting(null);
+                } catch (cause) {
+                  setDeleteError(cause instanceof Error ? cause.message : "删除失败");
+                  setDeleting(null);
+                } finally { setRemoving(false); }
               }}
             >
               删除项目

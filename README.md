@@ -16,10 +16,14 @@ npm run build
 
 当前为交互原型：五类项目管理、版本详情、只读参数与依赖、产物清单、发布流程和全部任务及日志窗口。成功版本复用 Arena 的 `FactorAnalysisReport`、`BacktestReport` 及其 DuckDB、统计与图表实现：因子项目显示因子分析，其余项目暂用同一份策略回测报告。运行中和失败版本显示任务状态。
 
-固定报告数据位于 `public/reports`，由 `scripts/generate-report-fixtures.py` 使用固定种子生成，属于合成示例，不是真实研究结果或交易日历。所有项目和版本复用各自类型的固定报告，界面标记“固定示例”。浏览器直接读取 Parquet，支持日期筛选、指标切换、明细分页与导出；左侧研究产物可下载源 Parquet。后续可将 `src/assets/lib/reportFixture.ts` 替换为真实报告接口。
+报告通过 `src/assets/lib/reports.ts` 按运行清单中的 `versions.scheme` 大版本选择适配器。当前支持 Scheme 1.x；未知或缺失版本显示错误，不回退套用旧报告。适配器决定报告文件映射、因子列、收益持有期和显示参数，图表组件通过注入的数据接口读取 Parquet。左侧下载链接与图表使用同一份运行清单。
+
+运行记录提供 `reportPath`（相对于共享 runs 目录的输出目录），前端读取 `/api/v1/reports/{reportPath}/run.json` 及其中声明的 Parquet。报告版本取自该次实际运行，与项目创建时的版本无关。显式标记 `reportFixture: true` 的原型记录仍使用 `public/reports` 中 Scheme 1 的固定合成数据；未关联真实目录的记录不会自动显示示例报告。
+
+创建项目时先选择 Scheme，再选择兼容 Algo。根据版本接口返回的实际包版本，前端只允许选择已实现业务适配的 Scheme 大版本；更新适配器时同步更新 `scheme.ts` 的支持列表。
 
 UI 基础组件位于 `src/ui`，通过 shadcn 官方 CLI 的 `new-york` 注册表安装；页面只组合这些组件。组件中的 `cn` 导入统一使用项目现有工具函数。
 
-项目与发布状态使用独立的 `solo.prototype.research` 本地存储，任务和日志来自 `src/assets/lib/prototype.ts` 示例数据。发布校验为模拟流程；示例 v10 演示接口校验失败。尚未连接项目 API、COS 或 DolphinScheduler，不会实际发布包或提交研究。刷新后保留项目修改和发布状态。
+项目增删改查已连接 Backend；版本提交、发布和任务记录接口尚未接入，后端目前返回空版本列表。`src/assets/lib/prototype.ts` 保留显式标记的原型数据，不会冒充真实研究记录。
 
-“打开 Jupyter”直接跳转到 `VITE_JUPYTER_URL/lab/tree/projects/{项目 ID}`。可在 `.env.local` 中配置地址；项目目录创建、绑定与 Jupyter 插件集成留待后续接入。
+“打开 Jupyter”通过 Backend 跳转项目 Notebook；创建时由 Backend 准备 `/shared/projects/{类型}/{项目名}`、uv 环境和 Kernel。
