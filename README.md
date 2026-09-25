@@ -18,7 +18,33 @@ npm run build
 
 报告通过 `src/assets/lib/reports.ts` 按运行清单中的 `versions.scheme` 大版本选择适配器。当前支持 Scheme 1.x；未知或缺失版本显示错误，不回退套用旧报告。适配器决定报告文件映射、因子列、收益持有期和显示参数，图表组件通过注入的数据接口读取 Parquet。左侧下载链接与图表使用同一份运行清单。
 
-运行记录提供 `reportPath`（相对于共享 runs 目录的输出目录），前端读取 `/api/v1/reports/{reportPath}/run.json` 及其中声明的 Parquet。报告版本取自该次实际运行，与项目创建时的版本无关。显式标记 `reportFixture: true` 的原型记录仍使用 `public/reports` 中 Scheme 1 的固定合成数据；未关联真实目录的记录不会自动显示示例报告。
+运行记录提供 `reportPath`（相对于共享 runs 目录的输出目录），前端读取 `/api/v1/reports/{reportPath}/run.json` 及其中声明的 Parquet。报告版本取自该次实际运行，与项目创建时的版本无关；未关联真实目录的记录不会显示示例报告。
+
+## Notebook iframe
+
+`/embed/report?project=factor&version=1.0.0&path=<run-id>/report` 只展示报告，不加载工作台导航、项目列表和轮询。
+
+- `project`：`factor`、`model`、`optimize`、`control` 或 `execution`。
+- `version`：Scheme 版本（也接受 `v1.0.0`）；前端按主版本选择适配器，并检查报告清单中的实际 Scheme 主版本。
+- `path`：共享 `/shared/runs` 下包含 `run.json` 的报告目录，可传相对路径或 `/shared/runs/...` 绝对路径。
+- `theme`：可选 `light` 或 `dark`，只影响 iframe，不改变工作台保存的主题偏好。
+
+在 Jupyter 中使用标准 IPython 组件：
+
+```python
+from urllib.parse import urlencode
+from IPython.display import IFrame, display
+
+query = urlencode({
+    "project": "factor",
+    "version": "1.0.0",
+    "path": "<run-id>/report",
+    "theme": "light",
+})
+display(IFrame(f"http://127.0.0.1:5174/embed/report?{query}", width="100%", height=1000))
+```
+
+URL 使用浏览器能访问的前端地址。报告数据由前端通过后端读取，Notebook 不内嵌 JS、WASM 或 Parquet。本入口用于已生成完整运行清单的报告；仅调用 `report.save()` 输出的 Parquet 目录目前不包含该清单。
 
 创建项目时先选择 Scheme，再选择兼容 Algo。根据版本接口返回的实际包版本，前端只允许选择已实现业务适配的 Scheme 大版本；更新适配器时同步更新 `scheme.ts` 的支持列表。
 

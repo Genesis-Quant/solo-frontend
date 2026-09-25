@@ -28,7 +28,6 @@ export interface ResearchVersion {
   error?: string;
   publishError?: string;
   reportPath?: string;
-  reportFixture?: boolean;
   parameters: Record<string, string>;
   dependencies: { name: string; version: string }[];
 }

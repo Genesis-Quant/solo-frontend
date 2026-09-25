@@ -17,15 +17,15 @@ function projectFromApi(project: ResearchProject): ResearchProject {
   return { ...project, updatedAt: new Date(project.updatedAt).toLocaleString("sv-SE").slice(0, 16) };
 }
 
-export const useResearchStore = create<ResearchStore>((set) => ({
+export const useResearchStore = create<ResearchStore>((set, get) => ({
   projects: [],
   loading: true,
   error: "",
   loadProjects: async () => {
-    set({ loading: true, error: "" });
+    if (!get().projects.length) set({ loading: true, error: "" });
     try {
       const projects = await client.get<ResearchProject[]>("/projects");
-      set({ projects: projects.map(projectFromApi), loading: false });
+      set({ projects: projects.map(projectFromApi), loading: false, error: "" });
     } catch (error) {
       set({ error: error instanceof Error ? error.message : "无法加载项目", loading: false });
     }

@@ -29,7 +29,6 @@ import { useAppStore } from "@/store";
 import type { AxisFormat, ChartRange, FactorChartRanges } from "@/types/chart";
 import type { FactorMetrics, FactorReportParameters } from "@/types/factor";
 import { Button } from "@/ui/button";
-import { Card, CardContent, CardHeader } from "@/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/ui/tabs";
 
 type DualChartRanges = { primary?: ChartRange; secondary?: ChartRange };
@@ -311,11 +310,11 @@ export default function FactorAnalysisReport({ chartRanges, factor, onChartRange
     />
 
     <SortableCardStack
-      storageKey="solo.prototype.factor-analysis.overview-card-order"
+      storageKey="solo.arena.factor-analysis.overview-card-order"
       items={[
         {
           id: "execution-statistics",
-          content: <ReportCard title="数据过滤统计">
+          content: <ReportCard title="DSL 执行统计">
             <p className="text-xs leading-5 text-muted-foreground">区域总上沿是当日过滤前股票数；色带从上到下按实际过滤顺序展示剔除数量，底部为最终截面。比例均以原始股票数为基准。</p>
             <ChartPanel title="每日股票域与过滤去向">
               <SeriesContent loading={executionStatisticsLoading} count={executionStatistics.length} height={360}>
@@ -499,11 +498,11 @@ function SummaryTiles({ items }: { items: DisplayMetric[] }) {
 }
 
 function ReportCard({ children, title }: { children: React.ReactNode; title: string }) {
-  return <motion.div animate={{ opacity: 1 }} initial={{ opacity: 0 }} transition={{ duration: 0.18, ease: "easeOut" }}><Card className="gap-2 rounded-md py-5"><CardHeader className="px-5 pr-14"><h3 className="text-base font-semibold">{title}</h3></CardHeader><CardContent className="space-y-4 px-5">{children}</CardContent></Card></motion.div>;
+  return <motion.div animate={{ opacity: 1 }} initial={{ opacity: 0 }} transition={{ duration: 0.18, ease: "easeOut" }}><div className="rounded-md border bg-card py-5 shadow-sm"><h3 className="px-5 pb-2 pr-14 text-base font-semibold">{title}</h3><div className="space-y-4 px-5">{children}</div></div></motion.div>;
 }
 
 function ChartPanel({ children, title }: { children: React.ReactNode; title: string }) {
-  return <motion.div animate={{ opacity: 1 }} initial={{ opacity: 0 }} transition={{ duration: 0.16, ease: "easeOut" }}><Card className="gap-2 rounded-md py-4"><CardHeader className="px-4"><h4 className="text-sm font-medium">{title}</h4></CardHeader><CardContent className="px-4">{children}</CardContent></Card></motion.div>;
+  return <motion.div animate={{ opacity: 1 }} initial={{ opacity: 0 }} transition={{ duration: 0.16, ease: "easeOut" }}><div className="rounded-md border bg-card py-4 shadow-sm"><h4 className="px-4 pb-2 text-sm font-medium">{title}</h4><div className="px-4">{children}</div></div></motion.div>;
 }
 
 function CardToolbar({ children, end }: { children: React.ReactNode; end?: React.ReactNode }) {

@@ -9,11 +9,23 @@ const bundles: duckdb.DuckDBBundles = {
   eh: { mainModule: duckdbEhWasm, mainWorker: duckdbEhWorker }
 };
 
+// The Scheme build embeds its worker and WASM as local Blob URLs.
+declare const __SCHEME_NOTEBOOK__: boolean;
+declare global {
+  interface Window {
+    __SCHEME_DUCKDB__?: duckdb.DuckDBBundles;
+  }
+}
+
 export class BrowserDuckDb {
   private constructor(private readonly database: duckdb.AsyncDuckDB, private readonly connection: duckdb.AsyncDuckDBConnection) {}
 
   static async create(files: Record<string, ArrayBuffer>) {
-    const bundle = await duckdb.selectBundle(bundles);
+    const bundle = await duckdb.selectBundle(
+      typeof __SCHEME_NOTEBOOK__ !== "undefined" && __SCHEME_NOTEBOOK__
+        ? window.__SCHEME_DUCKDB__!
+        : bundles
+    );
     if (!bundle.mainWorker) throw new Error("当前浏览器无法启动 DuckDB Worker");
     const worker = new Worker(bundle.mainWorker);
     const database = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), worker);

@@ -10,12 +10,26 @@ import { projectKinds } from "@/types/research";
 import ProjectsPage from "@/views/ProjectsPage";
 import ProjectPage from "@/views/ProjectPage";
 import TasksPage from "@/views/TasksPage";
+import EmbeddedReportPage from "@/views/EmbeddedReportPage";
 
 export default function App() {
+  return (
+    <Routes>
+      <Route path="/embed/report" element={<EmbeddedReportPage />} />
+      <Route path="*" element={<Workbench />} />
+    </Routes>
+  );
+}
+
+function Workbench() {
   const load = useResearchStore((state) => state.loadProjects);
   const loading = useResearchStore((state) => state.loading);
   const error = useResearchStore((state) => state.error);
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => {
+    void load();
+    const timer = setInterval(() => { if (!document.hidden) void load(); }, 5000);
+    return () => clearInterval(timer);
+  }, [load]);
   return (
     <AppLayout>
       {loading ? <div className="space-y-5 p-8" aria-label="加载项目"><Skeleton className="h-8 w-48" /><Skeleton className="h-64 w-full" /></div> : error ? (

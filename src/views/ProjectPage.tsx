@@ -115,7 +115,7 @@ function ProjectDetail({
       .then((data) => { if (!controller.signal.aborted) setReport(data); })
       .catch((error: Error) => { if (!controller.signal.aborted) setReportError(error.message); });
     return () => controller.abort();
-  }, [version, project.kind]);
+  }, [version?.id, version?.status, version?.reportPath, project.kind]);
   function changeVersion(id: string) {
     selectVersion(id);
   }
@@ -300,7 +300,6 @@ function ProjectDetail({
           <h2 className="text-base font-semibold">
             {kindLabels[project.kind]}
             {!version || version.status === "success" ? "报告" : "执行状态"}
-            {version?.status === "success" && version.reportFixture && !version.reportPath && <Badge variant="secondary" className="ml-2 font-normal">固定示例</Badge>}
           </h2>
           <Button asChild variant="outline" className="bg-card">
             <a href={`${apiUrl}/projects/${project.id}/jupyter`} target="_blank" rel="noreferrer">

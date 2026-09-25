@@ -2,8 +2,7 @@ import { createContext, useContext } from "react";
 import type { ProjectKind, ResearchVersion } from "@/types/research";
 import type { FactorReportParameters } from "@/types/factor";
 import { apiUrl } from "./settings";
-import { schemeMajor } from "./scheme";
-import { factorFixtureParameters, reportFixtureUrl, reportOutputs } from "./reportFixture";
+import { schemeMajor, supportsScheme } from "./scheme";
 
 export interface ReportData {
   schemeVersion: string;
@@ -78,23 +77,23 @@ export function parseReport(manifest: unknown, outputUrl: string, projectKind: P
 }
 
 export async function loadReport(version: ResearchVersion, kind: ProjectKind, signal?: AbortSignal): Promise<ReportData> {
-  if (version.reportPath) {
-    const path = version.reportPath.split("/");
-    if (path.some((part) => !part || part === "." || part === ".." || part.includes("\\"))) throw new Error("报告路径无效");
-    const url = `${apiUrl}/reports/${path.map(encodeURIComponent).join("/")}`;
-    const response = await fetch(`${url}/run.json`, { signal });
-    if (!response.ok) throw new Error(`报告清单读取失败 (${response.status})`);
-    return parseReport(await response.json(), url, kind);
+  if (!version.reportPath) throw new Error("该次运行尚未关联报告目录");
+  return loadReportPath(version.reportPath, kind, undefined, signal);
+}
+
+/** path 为共享 runs 下的报告目录；Scheme 主版本决定报告解析方式。 */
+export async function loadReportPath(path: string, kind: ProjectKind, schemeVersion?: string, signal?: AbortSignal): Promise<ReportData> {
+  if (schemeVersion !== undefined && !supportsScheme(schemeVersion)) throw new Error(`尚不支持 Scheme ${schemeVersion} 的报告`);
+  const parts = path.replace(/^\/shared\/runs\//, "").split("/");
+  if (parts.some((part) => !part || part === "." || part === ".." || /[\\:\u0000]/.test(part))) throw new Error("报告路径无效");
+  const url = `${apiUrl}/reports/${parts.map(encodeURIComponent).join("/")}`;
+  const response = await fetch(`${url}/run.json`, { signal });
+  if (!response.ok) throw new Error(`报告清单读取失败 (${response.status})`);
+  const report = parseReport(await response.json(), url, kind);
+  if (schemeVersion !== undefined && schemeMajor(report.schemeVersion) !== schemeMajor(schemeVersion)) {
+    throw new Error(`报告使用 Scheme ${report.schemeVersion}，与请求的 Scheme ${schemeVersion} 主版本不一致`);
   }
-  if (!version.reportFixture) throw new Error("该次运行尚未关联报告目录");
-  // 占位数据明确属于 Scheme 1，不能借用项目当前版本解释历史报告。
-  const reportKind = kind === "factor" ? "factor" : "backtest";
-  return {
-    schemeVersion: "1.0.0", kind: reportKind,
-    files: Object.fromEntries(reportOutputs[reportKind].map((name) => [name, reportFixtureUrl(reportKind, name)])),
-    parameters: reportKind === "factor" ? factorFixtureParameters : undefined,
-    annualTradingDays: 252, riskFreeRate: 0
-  };
+  return report;
 }
 
 export function reportApi(report: ReportData): ReportApi {

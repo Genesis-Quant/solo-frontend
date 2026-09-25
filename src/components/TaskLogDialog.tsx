@@ -9,8 +9,9 @@ import {
   X
 } from "lucide-react";
 
-import { stepState, taskLogs } from "@/assets/lib/prototype";
+import { stepState } from "@/assets/lib/prototype";
 import { cn } from "@/assets/lib/utils";
+import { client } from "@/assets/lib/request";
 import {
   runLabels,
   stepLabels,
@@ -32,7 +33,7 @@ import { Empty, EmptyHeader, EmptyTitle } from "@/ui/empty";
 import { Label } from "@/ui/label";
 import { ScrollArea, ScrollBar } from "@/ui/scroll-area";
 import { Switch } from "@/ui/switch";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/tabs";
+import { Tabs, TabsContent } from "@/ui/tabs";
 
 export default function TaskLogDialog({
   project,
@@ -52,7 +53,17 @@ export default function TaskLogDialog({
   const [copied, setCopied] = useState(false);
   const [copyError, setCopyError] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
-  const logs = taskLogs(version, step);
+  const [liveLogs, setLiveLogs] = useState<string[]>([]);
+  useEffect(() => {
+    let active = true;
+    const load = () => client.get<{ message: string }>(`/projects/${project.id}/versions/${version.id}/logs`)
+      .then((result) => { if (active) setLiveLogs(result.message.split("\n").filter(Boolean)); })
+      .catch((error: Error) => { if (active) setLiveLogs([error.message]); });
+    void load();
+    const timer = setInterval(() => void load(), 5000);
+    return () => { active = false; clearInterval(timer); };
+  }, [project.id, version.id]);
+  const logs = liveLogs;
   const visibleLogs = logs.filter(
     (line) => !errorsOnly || line.includes("ERROR")
   );
@@ -127,10 +138,6 @@ export default function TaskLogDialog({
             </span>
           </span>
           <span>
-            Worker{" "}
-            <span className="font-mono text-foreground">solo-worker-01</span>
-          </span>
-          <span>
             开始于{" "}
             <span className="tabular-nums text-foreground">
               {version.submittedAt}
@@ -153,22 +160,6 @@ export default function TaskLogDialog({
           }}
           className="min-h-0 flex-1 gap-0"
         >
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b px-5 py-3">
-            <TabsList>
-              {(Object.keys(stepLabels) as TaskStep[]).map((item) => (
-                <TabsTrigger value={item} key={item}>
-                  {stepLabels[item]}
-                  {stepState(version, item) === "success" && (
-                    <Check className="size-3 text-emerald-600 dark:text-emerald-400" />
-                  )}
-                </TabsTrigger>
-              ))}
-            </TabsList>
-            <span className="text-xs text-muted-foreground">
-              任务实例 #
-              {version.workflowId * 10 + Object.keys(stepLabels).indexOf(step)}
-            </span>
-          </div>
           <div className="flex flex-wrap items-center justify-between gap-3 px-5 py-3">
             <div className="flex flex-wrap items-center gap-5">
               <div className="flex items-center gap-2">
@@ -228,7 +219,7 @@ export default function TaskLogDialog({
                   <div className="min-w-max p-5 font-mono text-xs leading-7">
                     {visibleLogs.map((line, index) => (
                       <div
-                        key={line}
+                        key={index}
                         className={
                           line.includes("ERROR")
                             ? "text-destructive"
