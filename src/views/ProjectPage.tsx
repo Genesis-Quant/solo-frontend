@@ -21,10 +21,10 @@ import {
   stepState
 } from "@/assets/lib/prototype";
 import { apiUrl } from "@/assets/lib/settings";
-import ProjectForm from "@/components/ProjectForm";
+import ProjectDialog from "@/components/modal/ProjectDialog";
 import ResearchReport from "@/components/panel/ResearchReport";
 import { loadReport, type ReportData } from "@/assets/lib/reports";
-import TaskLogDialog from "@/components/TaskLogDialog";
+import TaskLogDialog from "@/components/modal/TaskLogDialog";
 import { useResearchStore } from "@/store/research";
 import {
   kindLabels,
@@ -57,6 +57,65 @@ import {
 import { Separator } from "@/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/ui/tooltip";
+
+function parameterObject(value: string | undefined): Record<string, unknown> {
+  try {
+    const parsed: unknown = JSON.parse(value ?? "{}");
+    return asObject(parsed);
+  } catch {
+    return {};
+  }
+}
+
+function asObject(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown> : {};
+}
+
+function parameterRows(params: Record<string, unknown>, prefix = ""): [string, string][] {
+  return Object.entries(params).flatMap(([key, value]) => {
+    const name = prefix ? `${prefix}.${key}` : key;
+    if (value !== null && typeof value === "object") {
+      if (Object.keys(value).length === 0) return [[name, "无"]];
+      return parameterRows(Array.isArray(value) ? Object.fromEntries(value.map((item, index) => [index + 1, item])) : asObject(value), name);
+    }
+    return [[name, value == null ? "未设置" : typeof value === "boolean" ? (value ? "是" : "否") : String(value)]];
+  });
+}
+
+const runParameterKeys = new Set([
+  "start", "end", "universe", "market_data", "symbols", "benchmark", "batch_days", "config",
+  "model", "optimize", "control", "execution"
+]);
+
+function algorithmParameters(version: ResearchVersion): [string, string][] {
+  const params = parameterObject(version.parameters.backtest ?? version.parameters.factor);
+  return parameterRows(Object.fromEntries(Object.entries(params).filter(([key]) => !runParameterKeys.has(key))));
+}
+
+function runParameters(version: ResearchVersion): Record<string, string> {
+  const params = parameterObject(version.parameters.backtest ?? version.parameters.analysis);
+  const factor = parameterObject(version.parameters.factor);
+  const universe = asObject(params.universe ?? factor.universe);
+  const config = asObject(params.config);
+  const start = params.start ?? factor.start;
+  const end = params.end ?? factor.end;
+  const values: Record<string, string> = {};
+  if (start && end) values.数据区间 = `${start} — ${end}（不含结束日）`;
+  if (universe.pool) values.股票池 = String(universe.pool);
+  if (params.benchmark) values.基准 = String(params.benchmark);
+  if (config.cash !== undefined) values.初始资金 = `¥${Number(config.cash).toLocaleString()}`;
+  if (config.commission !== undefined) values.佣金费率 = `${Number(config.commission) * 100}%`;
+  if (config.tax !== undefined) values.印花税率 = `${Number(config.tax) * 100}%`;
+  if (params.market_data) values.行情类型 = params.market_data === "stock_daily" ? "日频合成快照" : "Tick 快照";
+  if (params.batch_days !== undefined) values.每批天数 = String(params.batch_days);
+  if (version.parameters.analysis) {
+    Object.assign(values, Object.fromEntries(parameterRows(Object.fromEntries(
+      Object.entries(params).filter(([key]) => !runParameterKeys.has(key))
+    ))));
+  }
+  return values;
+}
 
 export default function ProjectPage() {
   const { projectId } = useParams();
@@ -121,7 +180,7 @@ function ProjectDetail({
   }
   return (
     <div className="flex min-h-full flex-col lg:h-full lg:flex-row">
-      <aside className="flex shrink-0 flex-col border-b bg-card lg:w-[286px] lg:border-r lg:border-b-0">
+      <aside className="flex min-w-0 shrink-0 flex-col border-b bg-card [overflow-wrap:anywhere] lg:w-[286px] lg:border-r lg:border-b-0">
         <div className="space-y-4 p-5 pb-4">
           <div className="flex items-start justify-between gap-2">
             <div className="min-w-0">
@@ -151,7 +210,7 @@ function ProjectDetail({
                 <TabsTrigger value="parameters">参数与依赖</TabsTrigger>
                 <TabsTrigger value="artifacts">研究产物</TabsTrigger>
               </TabsList>
-              <ScrollArea className="min-h-0 flex-1 lg:h-0">
+              <ScrollArea className="min-h-0 min-w-0 flex-1 [&_[data-slot=scroll-area-viewport]>div]:!block lg:h-0">
                 <TabsContent
                   value="parameters"
                   className="m-0 space-y-5 p-5 text-xs"
@@ -159,17 +218,7 @@ function ProjectDetail({
                   <section className="space-y-3">
                     <h2 className="font-semibold">运行参数</h2>
                     <dl className="space-y-3">
-                      {Object.entries({
-                        数据区间: "2024-01-02 — 2025-06-30",
-                        股票池: "中证全指 · 动态成分",
-                        ...project.kind === "factor"
-                          ? {}
-                          : {
-                              基准: "沪深 300",
-                              初始资金: "¥1,000,000",
-                              "决策 / 成交": "收盘决策 / 次日开盘"
-                            }
-                      }).map(([name, value]) => (
+                      {Object.entries(runParameters(version)).map(([name, value]) => (
                         <div key={name}>
                           <dt className="mb-1 text-muted-foreground">{name}</dt>
                           <dd>{value}</dd>
@@ -181,7 +230,7 @@ function ProjectDetail({
                   <section className="space-y-3">
                     <h2 className="font-semibold">算法参数</h2>
                     <dl className="space-y-3">
-                      {Object.entries(version.parameters).map(
+                      {algorithmParameters(version).map(
                         ([name, value]) => (
                           <div key={name}>
                             <dt className="mb-1 font-mono text-muted-foreground">
@@ -190,6 +239,9 @@ function ProjectDetail({
                             <dd className="break-words">{value}</dd>
                           </div>
                         )
+                      )}
+                      {algorithmParameters(version).length === 0 && (
+                        <p className="text-muted-foreground">无算法参数</p>
                       )}
                     </dl>
                   </section>
@@ -201,12 +253,14 @@ function ProjectDetail({
                       version.dependencies.map((dependency) => (
                         <div
                           key={dependency.name}
-                          className="flex items-center justify-between gap-2"
+                          className="flex min-w-0 items-start justify-between gap-2"
                         >
-                          <span>{dependency.name}</span>
+                          <span className="min-w-0" title={dependency.name}>
+                            {dependency.name.replace(/^(factor|model|optimize|control|execution)-([0-9a-f]{4})[0-9a-f]{28}$/, "$1-$2")}
+                          </span>
                           <Badge
                             variant="outline"
-                            className="font-mono text-[10px]"
+                            className="max-w-20 shrink-0 whitespace-normal font-mono text-[10px]"
                           >
                             {dependency.version}
                           </Badge>
@@ -335,7 +389,7 @@ function ProjectDetail({
         </div>
       </section>
       {editing && (
-        <ProjectForm
+        <ProjectDialog
           kind={project.kind}
           project={project}
           onClose={() => setEditing(false)}
@@ -344,9 +398,9 @@ function ProjectDetail({
       {logs && version && (
         <TaskLogDialog
           key={version.id}
-          project={project}
-          version={version}
-          initialStep={logs}
+            description={`${project.name} / v${version.number}`}
+            apiBase={`/projects/${project.id}/versions/${version.id}`}
+            workflowId={version.workflowId}
           onClose={() => setLogs(null)}
         />
       )}

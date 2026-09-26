@@ -3,6 +3,12 @@
 
 @custom-variant dark (&:is([data-theme="dark"] *));
 
+@layer base {
+  :where(button, [role="button"], [role="tab"], [role="combobox"], [role="switch"]):not(:disabled):not([aria-disabled="true"]):not([data-disabled]) {
+    cursor: pointer;
+  }
+}
+
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);

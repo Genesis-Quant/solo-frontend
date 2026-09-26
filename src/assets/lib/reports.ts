@@ -4,6 +4,8 @@ import type { FactorReportParameters } from "@/types/factor";
 import { apiUrl } from "./settings";
 import { schemeMajor, supportsScheme } from "./scheme";
 
+export type ReportProjectKind = ProjectKind | "strategy";
+
 export interface ReportData {
   schemeVersion: string;
   kind: "factor" | "backtest";
@@ -35,9 +37,9 @@ function positiveInteger(value: unknown): number {
   return value;
 }
 
-function readV1(input: Record<string, unknown>, files: Record<string, string>, schemeVersion: string): ReportData {
-  if (input.kind !== "factor" && input.kind !== "backtest") throw new Error("未知报告类型");
-  const kind = input.kind;
+function readV1(input: Record<string, unknown>, files: Record<string, string>, schemeVersion: string, reportKind: unknown): ReportData {
+  if (reportKind !== "factor" && reportKind !== "backtest") throw new Error("未知报告类型");
+  const kind = reportKind;
   for (const name of kind === "factor" ? ["information_coefficient", "group_returns"] : ["daily_portfolios", "trade_details", "daily_positions", "daily_trading_statistics"]) {
     if (!files[name]) throw new Error(`报告缺少 ${name}`);
   }
@@ -60,7 +62,7 @@ function readV1(input: Record<string, unknown>, files: Record<string, string>, s
 
 const adapters: Record<number, typeof readV1> = { 1: readV1 };
 
-export function parseReport(manifest: unknown, outputUrl: string, projectKind: ProjectKind): ReportData {
+export function parseReport(manifest: unknown, outputUrl: string, projectKind: ReportProjectKind): ReportData {
   const run = object(manifest);
   if (run.protocol !== 1 || run.status !== "success") throw new Error("报告尚未完成或清单协议不受支持");
   const version = object(run.versions).scheme;
@@ -68,12 +70,12 @@ export function parseReport(manifest: unknown, outputUrl: string, projectKind: P
   const adapter = major === null ? undefined : adapters[major];
   if (!adapter) throw new Error(`尚不支持 Scheme ${String(version ?? "未记录")} 的报告`);
   const input = object(run.input);
-  if (input.kind !== (projectKind === "factor" ? "factor" : "backtest")) throw new Error("报告类型与项目不一致");
+  if (input.kind !== projectKind) throw new Error("报告任务类型与项目不一致");
   const files = Object.fromEntries(Object.entries(object(run.reports)).map(([name, file]) => {
     if (typeof file !== "string" || !/^[\w.-]+\.parquet$/.test(file)) throw new Error("报告文件名无效");
     return [name, `${outputUrl}/${encodeURIComponent(file)}`];
   }));
-  return adapter(input, files, version as string);
+  return adapter(input, files, version as string, run.report_kind);
 }
 
 export async function loadReport(version: ResearchVersion, kind: ProjectKind, signal?: AbortSignal): Promise<ReportData> {
@@ -82,7 +84,7 @@ export async function loadReport(version: ResearchVersion, kind: ProjectKind, si
 }
 
 /** path 为共享 runs 下的报告目录；Scheme 主版本决定报告解析方式。 */
-export async function loadReportPath(path: string, kind: ProjectKind, schemeVersion?: string, signal?: AbortSignal): Promise<ReportData> {
+export async function loadReportPath(path: string, kind: ReportProjectKind, schemeVersion?: string, signal?: AbortSignal): Promise<ReportData> {
   if (schemeVersion !== undefined && !supportsScheme(schemeVersion)) throw new Error(`尚不支持 Scheme ${schemeVersion} 的报告`);
   const parts = path.replace(/^\/shared\/runs\//, "").split("/");
   if (parts.some((part) => !part || part === "." || part === ".." || /[\\:\u0000]/.test(part))) throw new Error("报告路径无效");

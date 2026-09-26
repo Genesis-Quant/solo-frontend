@@ -1,11 +1,14 @@
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
   Activity,
+  Blocks,
   ChartNoAxesCombined,
   ChartPie,
   FlaskConical,
   ListTodo,
   Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   ShieldCheck,
   Sun,
   Workflow
@@ -28,6 +31,7 @@ import { Separator } from "@/ui/separator";
 import {
   Sidebar,
   SidebarContent,
+  SidebarFooter,
   SidebarGroup,
   SidebarGroupContent,
   SidebarHeader,
@@ -85,7 +89,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
               <SidebarMenuButton
                 asChild
                 tooltip="Solo"
-                className="font-semibold tracking-wider"
+                className="font-semibold tracking-wider duration-200 ease-linear group-data-[collapsible=icon]:w-full! group-data-[collapsible=icon]:px-3!"
               >
                 <Link to="/projects/factor">
                   <FlaskConical className="text-primary" />
@@ -107,7 +111,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                         asChild
                         isActive={kind === item}
                         tooltip={kindLabels[item]}
-                        className="h-10 data-[active=true]:text-primary"
+                        className="h-10 duration-200 ease-linear group-data-[collapsible=icon]:h-10! group-data-[collapsible=icon]:w-full! group-data-[collapsible=icon]:px-4! data-[active=true]:text-primary"
                       >
                         <Link to={`/projects/${item}`}>
                           <Icon />
@@ -124,11 +128,16 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           <SidebarGroup>
             <SidebarMenu>
               <SidebarMenuItem>
+                <SidebarMenuButton asChild isActive={pathname.startsWith("/strategies")} tooltip="策略组装" className="h-10 duration-200 ease-linear group-data-[collapsible=icon]:h-10! group-data-[collapsible=icon]:w-full! group-data-[collapsible=icon]:px-4! data-[active=true]:text-primary">
+                  <Link to="/strategies"><Blocks /><span>策略组装</span></Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
                 <SidebarMenuButton
                   asChild
                   isActive={pathname === "/tasks"}
                   tooltip="全部任务"
-                  className="h-10 data-[active=true]:text-primary"
+                  className="h-10 duration-200 ease-linear group-data-[collapsible=icon]:h-10! group-data-[collapsible=icon]:w-full! group-data-[collapsible=icon]:px-4! data-[active=true]:text-primary"
                 >
                   <Link to="/tasks">
                     <ListTodo />
@@ -139,15 +148,18 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             </SidebarMenu>
           </SidebarGroup>
         </SidebarContent>
+        <SidebarFooter className="border-t p-2">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarCollapseButton />
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarFooter>
         <SidebarRail aria-label="折叠导航" title="折叠导航" />
       </Sidebar>
       <SidebarInset className="h-svh min-w-0 overflow-hidden bg-background">
         <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-card px-4">
-          <SidebarTrigger aria-label="切换侧栏" title="切换侧栏" />
-          <Separator
-            orientation="vertical"
-            className="mr-1 data-[orientation=vertical]:h-4"
-          />
+          <SidebarTrigger className="md:hidden" aria-label="打开导航" title="打开导航" />
           <Breadcrumb className="min-w-0 flex-1">
             <BreadcrumbList className="flex-nowrap">
               <BreadcrumbItem className="shrink-0">
@@ -161,7 +173,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                 )
 : (
                   <BreadcrumbPage>
-                    {kind ? kindLabels[kind] : "全部任务"}
+                    {kind ? kindLabels[kind] : pathname.startsWith("/strategies") ? "策略组装" : "全部任务"}
                   </BreadcrumbPage>
                 )}
               </BreadcrumbItem>
@@ -196,6 +208,23 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         <div className="min-h-0 flex-1 overflow-auto">{children}</div>
       </SidebarInset>
     </SidebarProvider>
+  );
+}
+
+function SidebarCollapseButton() {
+  const { state, isMobile, toggleSidebar } = useSidebar();
+  const expanded = isMobile || state === "expanded";
+  const label = expanded ? "收起侧栏" : "展开侧栏";
+  return (
+    <SidebarMenuButton
+      className="h-10 text-muted-foreground duration-200 ease-linear group-data-[collapsible=icon]:h-10! group-data-[collapsible=icon]:w-full! group-data-[collapsible=icon]:px-4!"
+      onClick={toggleSidebar}
+      aria-label={label}
+      tooltip={label}
+    >
+      {expanded ? <PanelLeftClose /> : <PanelLeftOpen />}
+      <span className="transition-opacity duration-200 group-data-[collapsible=icon]:opacity-0">收起侧栏</span>
+    </SidebarMenuButton>
   );
 }
 

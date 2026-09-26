@@ -50,6 +50,8 @@ URL 使用浏览器能访问的前端地址。报告数据由前端通过后端�
 
 UI 基础组件位于 `src/ui`，通过 shadcn 官方 CLI 的 `new-york` 注册表安装；页面只组合这些组件。组件中的 `cn` 导入统一使用项目现有工具函数。
 
+`src/components` 按界面形态分类：`badge`、`bar`、`card`、`chart`、`field`、`modal`、`panel`、`table`。不按业务内容、状态或实现技术建立 `log`、`status`、`motion`、`layout` 等目录；分页组件归入 `bar`，日志与折叠容器归入 `panel`。
+
 项目增删改查已连接 Backend；版本提交、发布和任务记录接口尚未接入，后端目前返回空版本列表。`src/assets/lib/prototype.ts` 保留显式标记的原型数据，不会冒充真实研究记录。
 
 “打开 Jupyter”通过 Backend 跳转项目 Notebook；创建时由 Backend 准备 `/shared/projects/{类型}/{项目名}`、uv 环境和 Kernel。

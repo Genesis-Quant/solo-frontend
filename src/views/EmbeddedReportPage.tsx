@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import { loadReportPath, type ReportData } from "@/assets/lib/reports";
+import { loadReportPath, type ReportData, type ReportProjectKind } from "@/assets/lib/reports";
 import ResearchReport from "@/components/panel/ResearchReport";
 import { useAppStore } from "@/store";
 import { projectKinds, type ProjectKind } from "@/types/research";
@@ -24,14 +24,14 @@ function EmbeddedReport({ params }: { params: URLSearchParams }) {
 
   useEffect(() => {
     const controller = new AbortController();
-    if (!projectKinds.includes(project as ProjectKind)) {
+    if (!projectKinds.includes(project as ProjectKind) && project !== "strategy") {
       setError("请提供有效的项目类型 project");
     } else if (!version || !path) {
       setError("请提供 Scheme 版本 version 和报告目录 path");
     } else if (theme !== null && theme !== "light" && theme !== "dark") {
       setError("theme 仅支持 light 或 dark");
     } else {
-      loadReportPath(path, project as ProjectKind, version, controller.signal)
+      loadReportPath(path, project as ReportProjectKind, version, controller.signal)
         .then((data) => { if (!controller.signal.aborted) setReport(data); })
         .catch((reason: Error) => { if (!controller.signal.aborted) setError(reason.message); });
     }

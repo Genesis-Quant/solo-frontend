@@ -33,7 +33,7 @@ import {
 } from "@/ui/select";
 import { Textarea } from "@/ui/textarea";
 
-export default function ProjectForm({
+export default function ProjectDialog({
   kind,
   project,
   onClose

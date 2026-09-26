@@ -20,6 +20,7 @@ async function request<T>(config: AxiosRequestConfig): Promise<T> {
 }
 
 export const client = {
+  getText: (url: string) => request<string>({ method: "GET", url, responseType: "text", timeout: 60000 }),
   get: <T>(url: string) => request<T>({ method: "GET", url, timeout: 60000 }),
   post: <T>(url: string, data: unknown) => request<T>({ method: "POST", url, data, timeout: 660000 }),
   patch: <T>(url: string, data: unknown) => request<T>({ method: "PATCH", url, data, timeout: 660000 }),

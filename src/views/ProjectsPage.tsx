@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
-import ProjectForm from "@/components/ProjectForm";
+import ProjectDialog from "@/components/modal/ProjectDialog";
 import { Alert, AlertDescription } from "@/ui/alert";
 import { useResearchStore } from "@/store/research";
 import {
@@ -255,7 +255,7 @@ export default function ProjectsPage({ kind }: { kind: ProjectKind }) {
         共 {filtered.length} 个项目
       </p>
       {form && (
-        <ProjectForm
+        <ProjectDialog
           kind={kind}
           project={form === "new" ? undefined : form}
           onClose={() => setForm(null)}

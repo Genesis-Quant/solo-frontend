@@ -24,7 +24,7 @@ import {
 } from "@/assets/lib/factorAnalysis";
 import DateRangeBar from "@/components/bar/DateRangeBar";
 import EChart from "@/components/chart/EChart";
-import SortableCardStack from "@/components/layout/SortableCardStack";
+import SortableCardStack from "@/components/card/SortableCardStack";
 import { useAppStore } from "@/store";
 import type { AxisFormat, ChartRange, FactorChartRanges } from "@/types/chart";
 import type { FactorMetrics, FactorReportParameters } from "@/types/factor";

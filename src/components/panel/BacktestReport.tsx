@@ -9,7 +9,7 @@ import { chartRange, chartRangeIncluding, formatAxisLabel, thresholdMarkLine } f
 import { quantStatsReport, type DrawdownPeriod, type QuantStatsReport } from "@/assets/lib/quantstats";
 import DateRangeBar from "@/components/bar/DateRangeBar";
 import EChart from "@/components/chart/EChart";
-import SortableCardStack from "@/components/layout/SortableCardStack";
+import SortableCardStack from "@/components/card/SortableCardStack";
 import ParquetDataTable from "@/components/table/ParquetDataTable";
 import { useAppStore } from "@/store";
 import type { AxisFormat, BacktestChartRanges, ChartRange } from "@/types/chart";
@@ -125,7 +125,7 @@ export default function BacktestReport({ activeTab, annualTradingDays, chartRang
   const tableContent = tableName ? renderParquetContent({ data: tableData, download: { fileName: `backtest-${workflowInstanceId}-${tableName}.xlsx`, loadRows: () => loadRawTable(tableName) }, error: tableLoadedKey === tableRequestKey ? tableError : "", loading: tableLoading || tableLoadedKey !== tableRequestKey, name: tableName, page: tablePage, pageSize: tablePageSize, query: tableQuery, onPage: setTablePage, onPageSize: (nextPageSize) => { setTablePage(1); setTablePageSize(nextPageSize); }, onQuery: (nextQuery) => { setTablePage(1); setTableQuery(nextQuery); } }) : null;
 
   return <Tabs value={selectedTab} onValueChange={(value) => { setTablePage(1); setTableQuery(emptyParquetTableQuery()); setLocalTab(value); onActiveTabChange?.(value); }} className="relative">
-    {showTabs ? <div className="sticky top-20 z-30 mb-2 max-w-full pb-1"><TabsList scrollable><TabsTrigger value="overview">回测概览</TabsTrigger>{tableTabs.map((tab) => <TabsTrigger disabled={loading || Boolean(error)} key={tab.value} value={tab.value}>{tab.label}</TabsTrigger>)}</TabsList></div> : null}
+    {showTabs ? <div className="sticky top-0 z-30 mb-2 max-w-full bg-background pb-1"><TabsList scrollable><TabsTrigger value="overview">回测概览</TabsTrigger>{tableTabs.map((tab) => <TabsTrigger disabled={loading || Boolean(error)} key={tab.value} value={tab.value}>{tab.label}</TabsTrigger>)}</TabsList></div> : null}
     {!loading && !error && portfolio.length ? <DateRangeBar endDate={endDate} maximumDate={portfolio.at(-1)?.time ?? ""} minimumDate={portfolio[0]?.time ?? ""} points={rangePoints} startDate={startDate} theme={theme} onRangeChange={(nextStartDate, nextEndDate) => { setTablePage(1); setStartDate(nextStartDate); setEndDate(nextEndDate); }} onReset={() => { setTablePage(1); setStartDate(portfolio[0]?.time ?? ""); setEndDate(portfolio.at(-1)?.time ?? ""); }} /> : null}
     <TabsContent value="overview" className="space-y-4">{overview}</TabsContent>
     {tableTabs.map((tab) => <TabsContent className="min-h-[calc(100dvh-20rem)]" key={tab.value} value={tab.value}>{selectedTab === tab.value ? tableContent : null}</TabsContent>)}

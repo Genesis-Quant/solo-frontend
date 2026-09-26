@@ -34,7 +34,7 @@ import { downloadExcel } from "@/assets/lib/excel";
 import { cn, errorMessage } from "@/assets/lib/utils";
 import ParquetTableBar, { type ParquetTableBarColumn, type ParquetTableBarFilter } from "@/components/bar/ParquetTableBar";
 import { StatusBadge } from "@/components/badge/StatusBadge";
-import { AppPagination } from "@/components/pagination/AppPagination";
+import { AppPagination } from "@/components/bar/AppPagination";
 import { useAnimatedColumnVisibility } from "@/components/table/useAnimatedColumnVisibility";
 import type { ParquetColumnConfig, ParquetColumnConfigs, ParquetFilterValue, ParquetNumericColumnStats, ParquetNumericColumnStatsMap, ParquetTableQuery } from "@/types/table";
 import { Card, CardContent } from "@/ui/card";

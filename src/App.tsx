@@ -10,6 +10,8 @@ import { projectKinds } from "@/types/research";
 import ProjectsPage from "@/views/ProjectsPage";
 import ProjectPage from "@/views/ProjectPage";
 import TasksPage from "@/views/TasksPage";
+import StrategiesPage from "@/views/StrategiesPage";
+import StrategyPage from "@/views/StrategyPage";
 import EmbeddedReportPage from "@/views/EmbeddedReportPage";
 
 export default function App() {
@@ -45,6 +47,8 @@ function Workbench() {
         )}
         <Route path="/projects/:projectId" element={<ProjectPage />} />
         <Route path="/tasks" element={<TasksPage />} />
+        <Route path="/strategies" element={<StrategiesPage />} />
+        <Route path="/strategies/:strategyId" element={<StrategyPage />} />
         <Route path="*" element={<Navigate to="/projects/factor" replace />} />
       </Routes>
       )}
