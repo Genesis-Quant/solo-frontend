@@ -13,7 +13,12 @@ export const useAppStore = create<AppStore>((set) => ({
   theme: storedTheme,
   setTheme: (theme) => {
     localStorage.setItem("solo.theme", theme);
-    document.documentElement.dataset.theme = theme;
-    set({ theme });
+    const apply = () => {
+      document.documentElement.dataset.theme = theme;
+      set({ theme });
+    };
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (document.startViewTransition && !reduced) document.startViewTransition(apply);
+    else apply();
   }
 }));

@@ -11,12 +11,17 @@ import {
   PanelLeftOpen,
   ShieldCheck,
   Sun,
-  Workflow
+  Workflow,
+  type LucideIcon
 } from "lucide-react";
+import { motion } from "motion/react";
 import { Link, useLocation } from "react-router-dom";
 
 import { useAppStore } from "@/store";
+import { useScrollMemory } from "@/hooks/useScrollMemory";
+import { isPrimaryPage, lastPrimaryPage } from "@/store/pageMemory";
 import { useResearchStore } from "@/store/research";
+import { useStrategyStore } from "@/store/strategy";
 import { kindLabels, projectKinds } from "@/types/research";
 import {
   Breadcrumb,
@@ -54,19 +59,31 @@ const icons = {
   execution: Workflow
 };
 
-export default function AppLayout({ children }: { children: ReactNode }) {
+const navButtonClass = "relative isolate h-10 duration-200 ease-linear group-data-[collapsible=icon]:h-10! group-data-[collapsible=icon]:w-full! group-data-[collapsible=icon]:px-4!";
+
+export default function AppLayout({ children, contentReady = true }: { children: ReactNode; contentReady?: boolean }) {
   const { pathname } = useLocation();
   const project = useResearchStore((state) =>
     state.projects.find((item) => pathname === `/projects/${item.id}`)
   );
+  const strategy = useStrategyStore((state) =>
+    state.records.find((item) => pathname === `/strategies/${item.id}`)
+  );
   const kind =
     project?.kind ??
     projectKinds.find((item) => pathname === `/projects/${item}`);
+  const section = kind
+    ? { label: kindLabels[kind], to: `/projects/${kind}` }
+    : pathname.startsWith("/strategies")
+      ? { label: "策略组装", to: "/strategies" }
+      : { label: "全部任务", to: "/tasks" };
+  const detail = project?.name ?? (pathname.startsWith("/strategies/") ? strategy?.name ?? "策略详情" : undefined);
   const theme = useAppStore((state) => state.theme);
   const setTheme = useAppStore((state) => state.setTheme);
   const [open, setOpen] = useState(
     () => localStorage.getItem("solo.sidebar") !== "closed"
   );
+  const { contentRef, onScroll } = useScrollMemory(pathname, contentReady);
   return (
     <SidebarProvider
       open={open}
@@ -91,7 +108,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                 tooltip="Solo"
                 className="font-semibold tracking-wider duration-200 ease-linear group-data-[collapsible=icon]:w-full! group-data-[collapsible=icon]:px-3!"
               >
-                <Link to="/projects/factor">
+                <Link to={isPrimaryPage(pathname) ? pathname : lastPrimaryPage()}>
                   <FlaskConical className="text-primary" />
                   <span>SOLO</span>
                 </Link>
@@ -103,48 +120,17 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           <SidebarGroup className="pt-5">
             <SidebarGroupContent>
               <SidebarMenu className="gap-1.5">
-                {projectKinds.map((item) => {
-                  const Icon = icons[item];
-                  return (
-                    <SidebarMenuItem key={item}>
-                      <SidebarMenuButton
-                        asChild
-                        isActive={kind === item}
-                        tooltip={kindLabels[item]}
-                        className="h-10 duration-200 ease-linear group-data-[collapsible=icon]:h-10! group-data-[collapsible=icon]:w-full! group-data-[collapsible=icon]:px-4! data-[active=true]:text-primary"
-                      >
-                        <Link to={`/projects/${item}`}>
-                          <Icon />
-                          <span>{kindLabels[item]}</span>
-                        </Link>
-                      </SidebarMenuButton>
-                    </SidebarMenuItem>
-                  );
-                })}
+                {projectKinds.map((item) => (
+                  <NavItem key={item} active={kind === item} icon={icons[item]} label={kindLabels[item]} to={`/projects/${item}`} />
+                ))}
               </SidebarMenu>
             </SidebarGroupContent>
           </SidebarGroup>
           <Separator className="mx-auto w-[calc(100%-24px)]" />
           <SidebarGroup>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={pathname.startsWith("/strategies")} tooltip="策略组装" className="h-10 duration-200 ease-linear group-data-[collapsible=icon]:h-10! group-data-[collapsible=icon]:w-full! group-data-[collapsible=icon]:px-4! data-[active=true]:text-primary">
-                  <Link to="/strategies"><Blocks /><span>策略组装</span></Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  asChild
-                  isActive={pathname === "/tasks"}
-                  tooltip="全部任务"
-                  className="h-10 duration-200 ease-linear group-data-[collapsible=icon]:h-10! group-data-[collapsible=icon]:w-full! group-data-[collapsible=icon]:px-4! data-[active=true]:text-primary"
-                >
-                  <Link to="/tasks">
-                    <ListTodo />
-                    <span>全部任务</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
+            <SidebarMenu className="gap-1.5">
+              <NavItem active={pathname.startsWith("/strategies")} icon={Blocks} label="策略组装" to="/strategies" />
+              <NavItem active={pathname === "/tasks"} icon={ListTodo} label="全部任务" to="/tasks" />
             </SidebarMenu>
           </SidebarGroup>
         </SidebarContent>
@@ -163,26 +149,16 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           <Breadcrumb className="min-w-0 flex-1">
             <BreadcrumbList className="flex-nowrap">
               <BreadcrumbItem className="shrink-0">
-                {project
-? (
-                  <BreadcrumbLink asChild>
-                    <Link to={`/projects/${project.kind}`}>
-                      {kindLabels[project.kind]}
-                    </Link>
-                  </BreadcrumbLink>
-                )
-: (
-                  <BreadcrumbPage>
-                    {kind ? kindLabels[kind] : pathname.startsWith("/strategies") ? "策略组装" : "全部任务"}
-                  </BreadcrumbPage>
-                )}
+                {detail
+                  ? <BreadcrumbLink asChild><Link to={section.to}>{section.label}</Link></BreadcrumbLink>
+                  : <BreadcrumbPage>{section.label}</BreadcrumbPage>}
               </BreadcrumbItem>
-              {project && (
+              {detail && (
                 <>
                   <BreadcrumbSeparator />
                   <BreadcrumbItem className="min-w-0">
-                    <BreadcrumbPage className="truncate">
-                      {project.name}
+                    <BreadcrumbPage key={detail} className="component-fade-in truncate">
+                      {detail}
                     </BreadcrumbPage>
                   </BreadcrumbItem>
                 </>
@@ -197,7 +173,9 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                 aria-label={theme === "light" ? "切换夜间模式" : "切换日间模式"}
                 onClick={() => setTheme(theme === "light" ? "dark" : "light")}
               >
-                {theme === "light" ? <Moon /> : <Sun />}
+                <span key={theme} className="flex animate-in fade-in spin-in-45 duration-300 motion-reduce:animate-none">
+                  {theme === "light" ? <Moon /> : <Sun />}
+                </span>
               </Button>
             </TooltipTrigger>
             <TooltipContent>
@@ -205,9 +183,34 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             </TooltipContent>
           </Tooltip>
         </header>
-        <div className="min-h-0 flex-1 overflow-auto">{children}</div>
+        <div ref={contentRef} className="min-h-0 flex-1 overflow-auto [scrollbar-gutter:stable]" onScroll={onScroll}>{children}</div>
       </SidebarInset>
     </SidebarProvider>
+  );
+}
+
+function NavItem({ active, icon: Icon, label, to }: { active: boolean; icon: LucideIcon; label: string; to: string }) {
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        asChild
+        isActive={active}
+        tooltip={label}
+        className={`${navButtonClass} data-[active=true]:bg-transparent data-[active=true]:text-primary`}
+      >
+        <Link to={to}>
+          {active && (
+            <motion.span
+              layoutId="sidebar-active"
+              className="absolute inset-0 -z-10 rounded-md bg-sidebar-accent"
+              transition={{ type: "spring", bounce: 0.15, duration: 0.4 }}
+            />
+          )}
+          <Icon />
+          <span>{label}</span>
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
   );
 }
 

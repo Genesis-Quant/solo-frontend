@@ -45,3 +45,4 @@ export type ParquetTableQuery = {
 };
 
 export const emptyParquetTableQuery = (): ParquetTableQuery => ({ filters: [], sorting: [] });
+export type ProjectSortOrder = "asc" | "desc";

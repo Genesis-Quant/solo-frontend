@@ -1,259 +1,70 @@
-import { useState } from "react";
-import {
-  ArrowUpRight,
-  FolderOpen,
-  MoreHorizontal,
-  Pencil,
-  Plus,
-  Search,
-  Trash2
-} from "lucide-react";
-import { Link } from "react-router-dom";
+import { useCallback, useMemo, useState } from "react";
+import { FolderOpen, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
 
 import ProjectDialog from "@/components/modal/ProjectDialog";
-import { Alert, AlertDescription } from "@/ui/alert";
+import ProjectDataTable, { type ProjectTableColumn } from "@/components/table/ProjectDataTable";
+import { useProjectTable } from "@/hooks/useProjectTable";
+import { PageHeader, pageContainer } from "@/components/bar/PageHeader";
+import { usePageState } from "@/store/pageMemory";
 import { useResearchStore } from "@/store/research";
-import {
-  kindLabels,
-  publishLabels,
-  runLabels,
-  type ProjectKind,
-  type ResearchProject
-} from "@/types/research";
+import { kindLabels, publishLabels, runLabels, type ProjectKind, type ResearchProject } from "@/types/research";
+import { Alert, AlertDescription } from "@/ui/alert";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle
-} from "@/ui/alert-dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger
-} from "@/ui/dropdown-menu";
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle
-} from "@/ui/empty";
-import { Input } from "@/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from "@/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow
-} from "@/ui/table";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/ui/alert-dialog";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "@/ui/dropdown-menu";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui/select";
+
+type ProjectSort = "name" | "version" | "status" | "publishStatus" | "updatedAt";
+const projectHref = (project: ResearchProject) => `/projects/${project.id}`;
 
 export default function ProjectsPage({ kind }: { kind: ProjectKind }) {
-  const projects = useResearchStore((state) => state.projects).filter(
-    (p) => p.kind === kind && !p.archived
-  );
+  const navigate = useNavigate();
+  const projects = useResearchStore((state) => state.projects).filter((p) => p.kind === kind && !p.archived);
   const remove = useResearchStore((state) => state.removeProject);
-  const [search, setSearch] = useState("");
-  const [status, setStatus] = useState("all");
+  const scope = `projects:${kind}`;
+  const [search, setSearch] = usePageState(scope, "search", "");
+  const [status, setStatus] = usePageState(scope, "status", "all");
   const [form, setForm] = useState<ResearchProject | "new" | null>(null);
   const [deleting, setDeleting] = useState<ResearchProject | null>(null);
   const [deleteError, setDeleteError] = useState("");
   const [removing, setRemoving] = useState(false);
-  const filtered = projects.filter(
-    (p) =>
-      `${p.name} ${p.description}`
-        .toLowerCase()
-        .includes(search.trim().toLowerCase()) &&
-      (status === "all" || (p.versions[0]?.status ?? "empty") === status)
-  );
+  const columns = useMemo<ProjectTableColumn<ResearchProject, ProjectSort>[]>(() => [
+    { id: "name", label: "项目", size: 280, sortKey: "name", value: (p) => p.name,
+      cell: (p, href) => <><Link to={href} className="block truncate rounded-sm font-medium group-hover:underline focus-visible:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" title={p.name}>{p.name}</Link><p className="mt-1 truncate text-xs text-muted-foreground" title={p.description}>{p.description || "—"}</p></> },
+    { id: "version", label: "最新版本", size: 112, sortKey: "version", value: (p) => p.versions[0]?.number ?? 0,
+      cell: (p) => <Badge variant="secondary" className="tabular-nums">{p.versions[0] ? `v${p.versions[0].number}` : "—"}</Badge> },
+    { id: "status", label: "研究状态", size: 120, sortKey: "status", value: (p) => p.versions[0]?.status,
+      cell: (p) => <Badge variant="outline" data-status={p.versions[0]?.status ?? "empty"} className="status-badge whitespace-nowrap">{p.versions[0] ? runLabels[p.versions[0].status] : "未提交"}</Badge> },
+    { id: "publishStatus", label: "发布状态", size: 120, sortKey: "publishStatus", value: (p) => p.versions[0]?.publishStatus,
+      cell: (p) => p.versions[0] ? <Badge variant="secondary" className={p.versions[0].publishStatus === "published" ? "bg-primary/10 text-primary" : ""}>{publishLabels[p.versions[0].publishStatus]}</Badge> : "—" },
+    { id: "updatedAt", label: "更新时间", size: 180, sortKey: "updatedAt", value: (p) => p.updatedAt, className: "tabular-nums text-muted-foreground" },
+    { id: "actions", label: "操作", size: 72, align: "right", value: (p) => p.id,
+      cell: (p) => <div onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+        <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon-sm" aria-label={`${p.name}操作`}><MoreHorizontal /></Button></DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem asChild><Link to={`/projects/${p.id}`}><FolderOpen />打开项目</Link></DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setForm(p)}><Pencil />编辑项目</DropdownMenuItem>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem variant="destructive" onSelect={() => setDeleting(p)}><Trash2 />删除项目</DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div> }
+  ], []);
+  const filtered = projects.filter((p) => `${p.name} ${p.description} ${p.id}`.toLowerCase().includes(search.toLowerCase()) && (status === "all" || (p.versions[0]?.status ?? "empty") === status));
+  const { resetPage, ...table } = useProjectTable(scope, filtered, columns, "updatedAt");
+  const changeSearch = useCallback((value: string) => { setSearch(value); resetPage(); }, [resetPage, setSearch]);
   return (
-    <section className="mx-auto max-w-[1600px] space-y-6 p-5 md:p-8">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold">{kindLabels[kind]}</h1>
-          <Badge variant="secondary" className="tabular-nums">
-            {projects.length}
-          </Badge>
-        </div>
-        <Button onClick={() => setForm("new")}>
-          <Plus />
-          新建项目
-        </Button>
-      </div>
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative w-full sm:max-w-xs">
-          <Search className="pointer-events-none absolute top-2.5 left-3 size-4 text-muted-foreground" />
-          <Input
-            aria-label="搜索项目"
-            placeholder="搜索项目名称或描述"
-            className="bg-card pl-9"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-          />
-        </div>
-        <Select value={status} onValueChange={setStatus}>
-          <SelectTrigger className="w-36 bg-card" aria-label="研究状态筛选">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">全部状态</SelectItem>
-            <SelectItem value="success">研究成功</SelectItem>
-            <SelectItem value="running">运行中</SelectItem>
-            <SelectItem value="failed">研究失败</SelectItem>
-            <SelectItem value="empty">未提交</SelectItem>
-          </SelectContent>
-        </Select>
-      </div>
+    <section className={pageContainer}>
+      <PageHeader title={kindLabels[kind]} count={projects.length} actions={<Button onClick={() => setForm("new")}><Plus />新建项目</Button>} />
       {deleteError && <Alert variant="destructive"><AlertDescription>{deleteError}</AlertDescription></Alert>}
-      <div className="overflow-hidden rounded-lg border bg-card">
-        <Table>
-          <TableHeader>
-            <TableRow className="bg-muted/50">
-              <TableHead className="min-w-64 pl-5">项目</TableHead>
-              <TableHead>最新版本</TableHead>
-              <TableHead>研究状态</TableHead>
-              <TableHead>发布状态</TableHead>
-              <TableHead className="whitespace-nowrap">更新时间</TableHead>
-              <TableHead className="w-14">
-                <span className="sr-only">项目操作</span>
-              </TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {filtered.map((project) => {
-              const latest = project.versions[0];
-              return (
-                <TableRow key={project.id}>
-                  <TableCell className="py-5 pl-5">
-                    <Link
-                      className="inline-flex items-center gap-2 font-medium hover:text-primary hover:underline"
-                      to={`/projects/${project.id}`}
-                    >
-                      {project.name}
-                      <ArrowUpRight className="size-3.5 text-muted-foreground" />
-                    </Link>
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {project.description || "—"}
-                    </p>
-                  </TableCell>
-                  <TableCell className="font-mono text-xs">
-                    {latest ? `v${latest.number}` : "—"}
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      variant="outline"
-                      data-status={latest?.status}
-                      className="status-badge whitespace-nowrap"
-                    >
-                      {latest ? runLabels[latest.status] : "未提交"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
-                    {latest
-? (
-                      <Badge
-                        variant="secondary"
-                        className={
-                          latest.publishStatus === "published"
-                            ? "bg-primary/10 text-primary"
-                            : ""
-                        }
-                      >
-                        {publishLabels[latest.publishStatus]}
-                      </Badge>
-                    )
-:
-                      "—"
-                    }
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap text-xs tabular-nums text-muted-foreground">
-                    {project.updatedAt}
-                  </TableCell>
-                  <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          aria-label={`${project.name}操作`}
-                        >
-                          <MoreHorizontal />
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem asChild>
-                          <Link to={`/projects/${project.id}`}>
-                            <FolderOpen />
-                            打开项目
-                          </Link>
-                        </DropdownMenuItem>
-                        <DropdownMenuItem onSelect={() => setForm(project)}>
-                          <Pencil />
-                          编辑项目
-                        </DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem
-                          variant="destructive"
-                          onSelect={() => setDeleting(project)}
-                        >
-                          <Trash2 />
-                          删除项目
-                        </DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  </TableCell>
-                </TableRow>
-              );
-            })}
-          </TableBody>
-        </Table>
-        {filtered.length === 0 && (
-          <Empty className="py-20">
-            <EmptyHeader>
-              <EmptyMedia variant="icon">
-                <FolderOpen />
-              </EmptyMedia>
-              <EmptyTitle>
-                {projects.length ? "没有匹配的项目" : "暂无项目"}
-              </EmptyTitle>
-              <EmptyDescription>
-                {projects.length
-                  ? "调整搜索条件后重试"
-                  : "创建你的第一个研究项目"}
-              </EmptyDescription>
-            </EmptyHeader>
-            <Button
-              variant="outline"
-              onClick={() => {
-                if (projects.length) {
-                  setSearch("");
-                  setStatus("all");
-                } else setForm("new");
-              }}
-            >
-              {projects.length ? "清除筛选" : "新建项目"}
-            </Button>
-          </Empty>
-        )}
-      </div>
-      <p className="text-xs text-muted-foreground">
-        共 {filtered.length} 个项目
-      </p>
+      <ProjectDataTable key={scope} {...table} columns={columns} loading={false} emptyMessage={status === "all" ? "暂无研究项目" : "没有符合筛选条件的项目"} rowHref={projectHref} onOpen={(p) => navigate(`/projects/${p.id}`)}
+        search={{ value: search, onChange: changeSearch, placeholder: "搜索项目名称、描述或 ID" }}
+        filters={<Select value={status} onValueChange={(value) => { setStatus(value); resetPage(); }}>
+          <SelectTrigger className="w-36" aria-label="研究状态筛选"><SelectValue /></SelectTrigger>
+          <SelectContent><SelectItem value="all">全部状态</SelectItem><SelectItem value="success">研究成功</SelectItem><SelectItem value="running">运行中</SelectItem><SelectItem value="failed">研究失败</SelectItem><SelectItem value="empty">未提交</SelectItem></SelectContent>
+        </Select>} />
       {form && (
         <ProjectDialog
           kind={kind}

@@ -55,10 +55,10 @@ export default function StrategyDialog({ onClose, onCreated }: { onClose: () => 
     <DialogContent className="flex max-h-[90svh] flex-col overflow-hidden sm:max-w-3xl">
       <DialogHeader><DialogTitle>创建策略</DialogTitle><DialogDescription>{step === 0 ? "选择 Model，再选择同一 Scheme 大版本的后续项目。" : `填写${kindLabels[stage]} Form${step === 1 ? "及公共回测设置" : ""}。`}</DialogDescription></DialogHeader>
       <div className="flex flex-wrap gap-2 border-b pb-4" aria-label="组装步骤">
-        {["选择项目", ...strategyStages.map((kind) => kindLabels[kind])].map((label, index) => <Badge key={label} variant={index === step ? "default" : "secondary"} className="gap-1.5 py-1">{index < step ? <Check className="size-3" /> : <span>{index + 1}</span>}{label}</Badge>)}
+        {["选择项目", ...strategyStages.map((kind) => kindLabels[kind])].map((label, index) => <Badge key={label} variant={index === step ? "default" : "secondary"} className="gap-1.5 py-1 transition-colors duration-200">{index < step ? <Check className="size-3" /> : <span>{index + 1}</span>}{label}</Badge>)}
       </div>
       <form onSubmit={(event) => void advance(event)} className="flex min-h-0 flex-1 flex-col gap-5">
-        <div className="min-h-0 flex-1 overflow-y-auto px-1 py-1">
+        <div key={step} className="component-fade-in min-h-0 flex-1 overflow-y-auto px-1 py-1">
           {step === 0 ? <div className="space-y-5">
             <div className="space-y-2"><Label htmlFor="strategy-name">策略名称</Label><Input id="strategy-name" required maxLength={60} value={name} onChange={(event) => setName(event.target.value)} placeholder="输入策略名称" /></div>
             {strategyStages.map((kind) => <div className="space-y-2" key={kind}>

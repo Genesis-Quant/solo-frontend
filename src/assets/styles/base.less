@@ -156,9 +156,40 @@ a {
   border-color: transparent;
 }
 
-.status-badge[data-status="running"] {
+.status-badge[data-status="running"],
+.status-badge[data-status="queued"],
+.status-badge[data-status="building"] {
   color: var(--accent);
   background: var(--control-accent);
+  border-color: transparent;
+}
+
+.status-badge[data-status="running"]::before,
+.status-badge[data-status="queued"]::before,
+.status-badge[data-status="building"]::before {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: currentColor;
+  content: "";
+  animation: status-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .status-badge::before {
+    animation: none !important;
+  }
+}
+
+.status-badge[data-status="empty"] {
+  color: var(--muted);
+  background: var(--control-secondary);
   border-color: transparent;
 }
 

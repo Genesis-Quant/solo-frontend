@@ -22,9 +22,11 @@ import {
 } from "@/assets/lib/prototype";
 import { apiUrl } from "@/assets/lib/settings";
 import ProjectDialog from "@/components/modal/ProjectDialog";
+import ReportSkeleton from "@/components/panel/ReportSkeleton";
 import ResearchReport from "@/components/panel/ResearchReport";
 import { loadReport, type ReportData } from "@/assets/lib/reports";
 import TaskLogDialog from "@/components/modal/TaskLogDialog";
+import { lastPrimaryPage, usePageState } from "@/store/pageMemory";
 import { useResearchStore } from "@/store/research";
 import {
   kindLabels,
@@ -127,10 +129,14 @@ export default function ProjectPage() {
     return (
       <Empty className="h-full">
         <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <CircleAlert />
+          </EmptyMedia>
           <EmptyTitle>项目不存在</EmptyTitle>
+          <EmptyDescription>项目可能已被删除，或链接地址有误</EmptyDescription>
         </EmptyHeader>
         <Button asChild variant="outline">
-          <Link to="/projects/factor">
+          <Link to={lastPrimaryPage()}>
             <ArrowLeft />
             返回项目列表
           </Link>
@@ -162,6 +168,7 @@ function ProjectDetail({
   selectVersion: (id: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [sideTab, setSideTab] = usePageState("project-detail", "sideTab", "parameters");
   const [logs, setLogs] = useState<TaskStep | null>(null);
   const [report, setReport] = useState<ReportData | null>(null);
   const [reportError, setReportError] = useState("");
@@ -205,7 +212,7 @@ function ProjectDetail({
         {version && (
           <>
             <Separator />
-            <Tabs defaultValue="parameters" className="min-h-0 flex-1 gap-0">
+            <Tabs value={sideTab} onValueChange={setSideTab} className="min-h-0 flex-1 gap-0">
               <TabsList className="mx-5 mt-4 grid grid-cols-2">
                 <TabsTrigger value="parameters">参数与依赖</TabsTrigger>
                 <TabsTrigger value="artifacts">研究产物</TabsTrigger>
@@ -365,11 +372,11 @@ function ProjectDetail({
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         {version?.status === "success"
 ? reportError
-  ? <Alert variant="destructive"><AlertDescription>{reportError}</AlertDescription></Alert>
-  : report ? <ResearchReport report={report} workflowId={version.workflowId} /> : <p className="text-muted-foreground">加载报告…</p>
+  ? <Alert variant="destructive" className="component-fade-in"><AlertDescription>{reportError}</AlertDescription></Alert>
+  : report ? <div className="component-fade-in"><ResearchReport report={report} workflowId={version.workflowId} /></div> : <ReportSkeleton />
 : !version
 ? (
-          <Empty className="min-h-72 border bg-card">
+          <Empty className="component-fade-in min-h-72 border bg-card shadow-sm">
             <EmptyHeader>
               <EmptyMedia variant="icon">
                 <FileChartColumn className="text-muted-foreground" />
@@ -512,7 +519,7 @@ function ExecutionState({
   onLogs: (step: TaskStep) => void;
 }) {
   return (
-    <div className="space-y-6 rounded-lg border bg-card p-6">
+    <div className="component-fade-in space-y-6 rounded-lg border bg-card p-6 shadow-sm">
       <div className="flex items-center justify-between">
         <h3 className="font-medium">
           v{version.number} · {runLabels[version.status]}

@@ -33,3 +33,6 @@ export interface FormSchema {
   "x-enum-labels"?: string[];
 }
 export type StrategyForms = Record<StrategyStage, { schema: FormSchema; values: Record<string, unknown> }>;
+
+export const strategyStatus: Record<string, string> = { building: "组装中", queued: "排队中", running: "回测中", success: "回测成功", failed: "回测失败" };
+export const strategyActive = (status: string) => ["building", "queued", "running"].includes(status);

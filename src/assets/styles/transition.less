@@ -28,3 +28,44 @@
   from { opacity: 0; }
   to { opacity: 1; }
 }
+
+// 路由切换只做淡入：页面容器与滚动区域等高，任何位移都会短暂撑出滚动条。
+// fill-mode 使用 backwards，结束后不残留样式。
+.page-enter {
+  animation: page-enter 280ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+.table-row-enter {
+  animation: table-row-enter 260ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+  animation-delay: calc(var(--row-index, 0) * 18ms);
+}
+
+@keyframes page-enter {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes table-row-enter {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: none; }
+}
+
+// 主题切换：浏览器支持 View Transitions 时整体淡入淡出。
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 240ms;
+  animation-timing-function: ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter,
+  .table-row-enter,
+  .component-fade-in {
+    animation: none;
+  }
+
+  ::view-transition-old(root),
+  ::view-transition-new(root) {
+    animation: none;
+  }
+}
