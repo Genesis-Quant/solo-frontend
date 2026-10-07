@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { ArrowLeft, ArrowRight, Check, LoaderCircle } from "lucide-react";
 import { client } from "@/assets/lib/request";
-import { schemeMajor } from "@/assets/lib/scheme";
+import { sameSchemeSeries, schemeMajor } from "@/assets/lib/scheme";
 import { useResearchStore } from "@/store/research";
 import { kindLabels } from "@/types/research";
 import { strategyStages, type StrategyForms, type StrategyRecord, type StrategySelection } from "@/types/strategy";
@@ -24,16 +24,26 @@ export default function StrategyDialog({ onClose, onCreated }: { onClose: () => 
   const [step, setStep] = useState(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const candidates = projects.flatMap((project) => project.versions.filter((version) => version.status === "success").map((version) => ({ project, version, scheme: version.dependencies.find((dependency) => dependency.name === "scheme")?.version ?? project.schemeVersion })));
-  const model = candidates.find((item) => item.version.id === selection.model);
-  const major = schemeMajor(model?.scheme);
+  const candidates = projects.filter((project) => !project.retired && !project.archived).flatMap((project) => project.versions
+    .filter((version) => version.status === "success" && !version.retired)
+    .map((version) => ({ project, version, scheme: version.dependencies.find((dependency) => dependency.name === "scheme")?.version }))
+    .filter((item) => schemeMajor(item.scheme) === 1));
+  const model = candidates.find((item) => item.project.kind === "model" && item.version.id === selection.model);
+  const selectionValid = !!model && strategyStages.every((kind) =>
+    kind !== "model" && selection[kind] === null || candidates.some((item) =>
+      item.project.kind === kind && item.version.id === selection[kind] && sameSchemeSeries(item.scheme, model.scheme)));
   const stage = strategyStages[step - 1];
   const current = forms && stage ? forms[stage] : null;
   async function advance(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+    if (!selectionValid) {
+      setError(selection.model
+        ? "所选研究版本已退役、缺少实际 Scheme 版本或不兼容，请重新选择"
+        : "请先选择 Model 研究版本");
+      return;
+    }
     if (step === 0) {
-      if (!selection.model) { setError("请先选择 Model 研究版本"); return; }
       if (forms) { setStep(1); return; }
       setBusy(true);
       try { setForms(await client.post<StrategyForms>("/strategies/forms", selection)); setStep(1); }
@@ -53,7 +63,7 @@ export default function StrategyDialog({ onClose, onCreated }: { onClose: () => 
   }
   return <Dialog open onOpenChange={(open) => { if (!open && !busy) onClose(); }}>
     <DialogContent className="flex max-h-[90svh] flex-col overflow-hidden sm:max-w-3xl">
-      <DialogHeader><DialogTitle>创建策略</DialogTitle><DialogDescription>{step === 0 ? "选择 Model，再选择同一 Scheme 大版本的后续项目。" : `填写${kindLabels[stage]} Form${step === 1 ? "及公共回测设置" : ""}。`}</DialogDescription></DialogHeader>
+      <DialogHeader><DialogTitle>创建策略</DialogTitle><DialogDescription>{step === 0 ? "选择 Model，再选择 Scheme 主版本、次版本一致的后续项目，补丁版本可不同。" : `填写${kindLabels[stage]} Form${step === 1 ? "及公共回测设置" : ""}。`}</DialogDescription></DialogHeader>
       <div className="flex flex-wrap gap-2 border-b pb-4" aria-label="组装步骤">
         {["选择项目", ...strategyStages.map((kind) => kindLabels[kind])].map((label, index) => <Badge key={label} variant={index === step ? "default" : "secondary"} className="gap-1.5 py-1 transition-colors duration-200">{index < step ? <Check className="size-3" /> : <span>{index + 1}</span>}{label}</Badge>)}
       </div>
@@ -68,10 +78,11 @@ export default function StrategyDialog({ onClose, onCreated }: { onClose: () => 
                 setForms(null);
               }}><SelectTrigger className="w-full" id={`strategy-${kind}`}><SelectValue placeholder="选择成功的研究版本" /></SelectTrigger>
                 <SelectContent>{kind !== "model" && <SelectItem value="default">默认 · {defaults[kind]}</SelectItem>}
-                  {candidates.filter((item) => item.project.kind === kind && (kind === "model" ? schemeMajor(item.scheme) === 1 : schemeMajor(item.scheme) === major)).map(({ project, version, scheme }) => <SelectItem key={version.id} value={version.id}>{project.name} · v{version.number} · Scheme {scheme}{version.note ? ` · ${version.note}` : ""}</SelectItem>)}
+                  {candidates.filter((item) => item.project.kind === kind && (kind === "model" || sameSchemeSeries(item.scheme, model?.scheme))).map(({ project, version, scheme }) => <SelectItem key={version.id} value={version.id}>{project.name} · v{version.number} · Scheme {scheme}{version.note ? ` · ${version.note}` : ""}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>)}
+            {!candidates.some((item) => item.project.kind === "model") && <p className="text-sm text-muted-foreground">暂无可用的 Model 研究版本，请使用未退役且已记录实际 Scheme 1.x 版本的成功研究成果。</p>}
           </div> : current && <>
             <p className="mb-5 text-sm text-muted-foreground">{selection[stage] ? candidates.find((item) => item.version.id === selection[stage])?.project.name : defaults[stage as keyof typeof defaults]}</p>
             {Object.keys(current.schema.properties ?? {}).length ? <SchemaFields prefix={stage} schema={current.schema} values={current.values} onChange={(values) => setForms({ ...forms!, [stage]: { ...current, values } })} />
@@ -81,7 +92,7 @@ export default function StrategyDialog({ onClose, onCreated }: { onClose: () => 
         {error && <Alert variant="destructive"><AlertDescription className="max-h-36 overflow-auto whitespace-pre-wrap break-words">{error}</AlertDescription></Alert>}
         <DialogFooter className="shrink-0 border-t pt-4">
           <Button type="button" variant="outline" disabled={busy} onClick={() => step ? setStep(step - 1) : onClose()}>{step ? <><ArrowLeft />上一步</> : "取消"}</Button>
-          <Button type="submit" disabled={busy || (step === 0 && !selection.model)}>{busy ? <><LoaderCircle className="animate-spin" />{step === 0 ? "读取 Form…" : "组装并提交…"}</> : step === 4 ? "创建并回测" : <>下一步<ArrowRight /></>}</Button>
+          <Button type="submit" disabled={busy || !selectionValid}>{busy ? <><LoaderCircle className="animate-spin" />{step === 0 ? "读取 Form…" : "组装并提交…"}</> : step === 4 ? "创建并回测" : <>下一步<ArrowRight /></>}</Button>
         </DialogFooter>
       </form>
     </DialogContent>

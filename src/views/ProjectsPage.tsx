@@ -32,7 +32,7 @@ export default function ProjectsPage({ kind }: { kind: ProjectKind }) {
   const [removing, setRemoving] = useState(false);
   const columns = useMemo<ProjectTableColumn<ResearchProject, ProjectSort>[]>(() => [
     { id: "name", label: "项目", size: 280, sortKey: "name", value: (p) => p.name,
-      cell: (p, href) => <><Link to={href} className="block truncate rounded-sm font-medium group-hover:underline focus-visible:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" title={p.name}>{p.name}</Link><p className="mt-1 truncate text-xs text-muted-foreground" title={p.description}>{p.description || "—"}</p></> },
+      cell: (p, href) => <><Link to={href} className="block truncate rounded-sm font-medium group-hover:underline focus-visible:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring" title={p.name}>{p.name}</Link>{p.retired && <Badge variant="outline" className="mt-1" title={p.retiredReason ?? undefined}>已退役</Badge>}<p className="mt-1 truncate text-xs text-muted-foreground" title={p.description}>{p.description || "—"}</p></> },
     { id: "version", label: "最新版本", size: 112, sortKey: "version", value: (p) => p.versions[0]?.number ?? 0,
       cell: (p) => <Badge variant="secondary" className="tabular-nums">{p.versions[0] ? `v${p.versions[0].number}` : "—"}</Badge> },
     { id: "status", label: "研究状态", size: 120, sortKey: "status", value: (p) => p.versions[0]?.status,

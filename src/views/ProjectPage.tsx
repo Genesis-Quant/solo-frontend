@@ -172,6 +172,11 @@ function ProjectDetail({
   const [logs, setLogs] = useState<TaskStep | null>(null);
   const [report, setReport] = useState<ReportData | null>(null);
   const [reportError, setReportError] = useState("");
+  const retired = !!(project.retired || version?.retired);
+  const retiredReasons = [...new Set([
+    project.retired && project.retiredReason,
+    version?.retired && version.retiredReason
+  ].filter((reason): reason is string => !!reason))];
   useEffect(() => {
     if (version?.status !== "success") return;
     const controller = new AbortController();
@@ -369,6 +374,16 @@ function ProjectDetail({
             </a>
           </Button>
         </div>
+        {retired && (
+          <Alert>
+            <CircleAlert />
+            <AlertTitle>版本已退役</AlertTitle>
+            <AlertDescription>
+              {retiredReasons.map((reason) => <p key={reason}>{reason}</p>)}
+              <p>历史报告、产物、日志及 Jupyter 仍可查看；不能保存新研究版本、发布或用于新策略。退役项目仅可修改描述注释，归档操作仍可使用。</p>
+            </AlertDescription>
+          </Alert>
+        )}
         <div className="min-h-0 min-w-0 flex-1 overflow-y-auto [scrollbar-gutter:stable]">
         {version?.status === "success"
 ? reportError
@@ -385,7 +400,9 @@ function ProjectDetail({
                 暂无研究版本
               </EmptyTitle>
               <EmptyDescription>
-                在 Jupyter 中完成研究后提交版本
+                {project.retired
+                  ? "项目已退役，可在 Jupyter 中查看历史研究；请使用活跃版本新建项目开展研究。"
+                  : "在 Jupyter 中完成研究后提交版本"}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
@@ -426,9 +443,10 @@ function VersionActions({
 }) {
   const publish = useResearchStore((state) => state.publishVersion);
   const [confirmVersion, setConfirmVersion] = useState<string | null>(null);
+  const retired = !!(project.retired || version.retired);
   return (
     <div className="space-y-3 border-t p-4" aria-live="polite">
-      {confirmVersion === version.id && (
+      {!retired && confirmVersion === version.id && (
         <Alert>
           <AlertTitle>发布 v{version.number}？</AlertTitle>
           <AlertDescription>
@@ -436,7 +454,9 @@ function VersionActions({
             <div className="mt-3 flex gap-2">
               <Button
                 size="sm"
+                disabled={retired}
                 onClick={() => {
+                  if (retired) return;
                   setConfirmVersion(null);
                   publish(project.id, version.id);
                 }}
@@ -467,6 +487,7 @@ function VersionActions({
             <Button
               className="w-full"
               disabled={
+                retired ||
                 version.publishStatus === "published" ||
                 version.publishStatus === "checking" ||
                 !!confirmVersion
@@ -474,7 +495,7 @@ function VersionActions({
               variant={
                 version.publishStatus === "published" ? "secondary" : "default"
               }
-              onClick={() => setConfirmVersion(version.id)}
+              onClick={() => { if (!retired) setConfirmVersion(version.id); }}
             >
               {version.publishStatus === "checking"
 ? (
@@ -621,7 +642,7 @@ function VersionSummary({ project, version, changeVersion }: { project: Research
                   <SelectContent>
                     {project.versions.map((item) => (
                       <SelectItem value={item.id} key={item.id}>
-                        提交版本 v{item.number}
+                        提交版本 v{item.number}{(project.retired || item.retired) && " · 已退役"}
                       </SelectItem>
                     ))}
                   </SelectContent>

@@ -99,7 +99,8 @@ export default function ProjectDialog({
     return () => { active = false; };
   }, [project, refresh, schemeVersion, selectedKind]);
 
-  const versionsReady = !!schemeVersion && !!template && !loadingSchemes && !loadingVersions && !schemeError && !versionError;
+  const versionsReady = schemeVersions.some((item) => item.tag === schemeVersion && supportsScheme(item.version))
+    && versions.some((item) => item.tag === template) && !loadingSchemes && !loadingVersions && !schemeError && !versionError;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -112,7 +113,9 @@ export default function ProjectDialog({
     setError("");
     try {
       if (project) {
-        await edit(project.id, name.trim(), description.trim());
+        await edit(project.id, project.retired
+          ? project.name
+          : name.trim(), description.trim());
         onClose();
         return;
       }
@@ -166,10 +169,12 @@ export default function ProjectDialog({
             <Input
               id="project-name"
               autoFocus
+              disabled={project?.retired}
               placeholder="输入项目名称"
               maxLength={60}
               value={name}
               onChange={(event) => {
+                if (project?.retired) return;
                 setName(event.target.value);
                 setError("");
               }}
@@ -190,6 +195,7 @@ export default function ProjectDialog({
               onChange={(event) => setDescription(event.target.value)}
             />
           </div>
+          {project?.retired && <Alert><AlertDescription>{project.retiredReason || "项目已退役"}。仅可修改描述作为历史注释；不能重命名，不会重建环境、更改历史记录或恢复版本使用。</AlertDescription></Alert>}
           {!project && (
             <div className="space-y-4">
               <div className="space-y-2">
@@ -207,7 +213,7 @@ export default function ProjectDialog({
                   </SelectContent>
                 </Select>
                 {schemeError && <Alert variant="destructive"><AlertDescription>{schemeError}</AlertDescription></Alert>}
-                {!loadingSchemes && !schemeError && schemeVersions.length > 0 && !schemeVersions.some((item) => supportsScheme(item.version)) && <p className="text-sm text-muted-foreground">当前前端支持 Scheme 1.x，仓库尚无对应发布版本</p>}
+                {!loadingSchemes && !schemeError && !schemeVersions.some((item) => supportsScheme(item.version)) && <p className="text-sm text-muted-foreground">暂无当前前端支持的未退役 Scheme 版本（支持 Scheme 1.x），请发布受支持的活跃版本后刷新；已退役版本仅供历史查看，不能用于新建项目。</p>}
               </div>
               <div className="space-y-2">
               <Label htmlFor="template-version">Algo 版本</Label>
@@ -222,7 +228,7 @@ export default function ProjectDialog({
                 </SelectContent>
               </Select>
               {versionError && <Alert variant="destructive"><AlertDescription>{versionError}</AlertDescription></Alert>}
-              {schemeVersion && !loadingVersions && !versionError && !versions.length && <p className="text-sm text-muted-foreground">没有兼容所选 Scheme 的 Algo 版本</p>}
+              {schemeVersion && !loadingVersions && !versionError && !versions.length && <p className="text-sm text-muted-foreground">没有兼容所选 Scheme 的未退役 Algo 版本，请发布兼容的活跃版本后刷新，不能回退到已退役版本。</p>}
               </div>
               <Button type="button" variant="ghost" size="sm" disabled={loadingSchemes || loadingVersions} onClick={() => setRefresh((value) => value + 1)}>
                 <RefreshCw className={loadingSchemes || loadingVersions ? "animate-spin" : ""} />刷新版本

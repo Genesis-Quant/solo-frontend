@@ -28,6 +28,8 @@ export interface ResearchVersion {
   error?: string;
   publishError?: string;
   reportPath?: string;
+  retired?: boolean;
+  retiredReason?: string | null;
   parameters: Record<string, string>;
   dependencies: { name: string; version: string }[];
 }
@@ -44,6 +46,8 @@ export interface ResearchProject {
   directory?: string;
   updatedAt: string;
   archived: boolean;
+  retired?: boolean;
+  retiredReason?: string | null;
   versions: ResearchVersion[];
 }
 

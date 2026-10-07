@@ -93,6 +93,32 @@ function createHarness() {
   };
 }
 
+test("retired project rows remain visible and linked with a reason badge, retaining metadata/archive actions", () => {
+  const app = createHarness();
+  const retired = { ...project, retired: true, retiredReason: "创建版本已退役" };
+  app.research.projects = [retired];
+  const Page = app.load(pagePaths[0]).default;
+  const Table = app.load(tablePath).default;
+  const { DropdownMenuItem } = app.load(join(root, "src/ui/dropdown-menu.tsx"));
+  let actions;
+  function Probe() {
+    const [table] = findElements(Page({ kind: "model" }), (node) => node.type === Table);
+    actions = table.props.columns.find((column) => column.id === "actions").cell(retired);
+    return table;
+  }
+  const { html } = app.render(Probe);
+  assert.deepEqual(bodyLinks(html).map(({ text, href }) => [text, href]), [[retired.name, "/projects/project-one"]]);
+  assert.match(html, /title="创建版本已退役"[^>]*>已退役<\/span>/);
+  const items = findElements(actions, (node) => node.type === DropdownMenuItem);
+  const labels = items.map((node) => {
+    const words = [];
+    React.Children.forEach(node.props.children, (child) => { if (typeof child === "string") words.push(child); });
+    return [words.join(""), node.props.disabled];
+  });
+  assert.ok(labels.some(([label, disabled]) => label === "编辑项目" && !disabled));
+  assert.ok(labels.some(([label, disabled]) => label === "删除项目" && !disabled), "existing soft archive remains available");
+});
+
 const harness = createHarness();
 function bodyLinks(html) {
   const body = html.match(/<tbody\b[^>]*>([\s\S]*?)<\/tbody>/)?.[1];
