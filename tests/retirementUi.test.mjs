@@ -368,6 +368,34 @@ test("retired metadata editing only annotates description, keeping the original 
   } finally { app.close(); }
 });
 
+for (const kind of ["factor", ...stageNames]) {
+  test(`retirement during ${kind} metadata editing preserves description-only save after clearing the name`, async () => {
+    const record = project("metadata-poll", kind);
+    const props = { kind, project: record, onClose() {} };
+    const app = fixture("src/components/modal/ProjectDialog.tsx", { projects: [record], props });
+    try {
+      app.elements("Input")[0].props.onChange({ target: { value: "" } });
+      app.elements("Textarea")[0].props.onChange({ target: { value: "保留历史用途的描述" } });
+      await app.settle();
+      assert.equal(app.elements("Input")[0].props.value, "");
+      const retired = { ...record, retired: true, retiredReason: "版本已退役" };
+      props.project = retired;
+      app.state.projects = [retired];
+      app.render();
+      await app.settle();
+      assert.equal(app.elements("Input")[0].props.disabled, true);
+      assert.equal(app.elements("Input")[0].props.value, "metadata-poll");
+      await app.submit();
+      await app.settle();
+      assert.deepEqual(app.edits, [["metadata-poll", "metadata-poll", "保留历史用途的描述"]]);
+      assert.doesNotMatch(app.text(), /请输入项目名称/);
+      assert.deepEqual(app.creates, []);
+      assert.deepEqual(app.requests, []);
+    } finally { app.close(); }
+  });
+}
+
+
 test("empty active Scheme API results disable creation and explain unsupported/retired versions", async () => {
   const app = creation(() => []);
   try {

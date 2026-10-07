@@ -33,6 +33,10 @@ import {
 } from "@/ui/select";
 import { Textarea } from "@/ui/textarea";
 
+function projectName(project: ResearchProject | undefined, draft: string): string {
+  return project?.retired ? project.name : draft;
+}
+
 export default function ProjectDialog({
   kind,
   project,
@@ -99,12 +103,14 @@ export default function ProjectDialog({
     return () => { active = false; };
   }, [project, refresh, schemeVersion, selectedKind]);
 
+  const effectiveName = projectName(project, name);
   const versionsReady = schemeVersions.some((item) => item.tag === schemeVersion && supportsScheme(item.version))
     && versions.some((item) => item.tag === template) && !loadingSchemes && !loadingVersions && !schemeError && !versionError;
 
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!name.trim()) {
+    const submittedName = effectiveName.trim();
+    if (!submittedName.trim()) {
       setError("请输入项目名称");
       return;
     }
@@ -113,13 +119,11 @@ export default function ProjectDialog({
     setError("");
     try {
       if (project) {
-        await edit(project.id, project.retired
-          ? project.name
-          : name.trim(), description.trim());
+        await edit(project.id, submittedName, description.trim());
         onClose();
         return;
       }
-      const id = await create(name.trim(), description.trim(), selectedKind, schemeVersion, template);
+      const id = await create(submittedName, description.trim(), selectedKind, schemeVersion, template);
       onClose();
       navigate(`/projects/${id}`);
     } catch (cause) {
@@ -172,7 +176,7 @@ export default function ProjectDialog({
               disabled={project?.retired}
               placeholder="输入项目名称"
               maxLength={60}
-              value={name}
+              value={effectiveName}
               onChange={(event) => {
                 if (project?.retired) return;
                 setName(event.target.value);
