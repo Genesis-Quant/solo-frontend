@@ -8,7 +8,6 @@ import {
   CircleAlert,
   FileArchive,
   FileChartColumn,
-  FileCode2,
   FileText,
   LoaderCircle,
   Pencil,
@@ -20,6 +19,7 @@ import {
   defaultDownstream,
   stepState
 } from "@/assets/lib/prototype";
+import { artifactSize, artifactWheelUrl } from "@/assets/lib/artifacts";
 import { apiUrl } from "@/assets/lib/settings";
 import ProjectDialog from "@/components/modal/ProjectDialog";
 import ReportSkeleton from "@/components/panel/ReportSkeleton";
@@ -30,6 +30,7 @@ import { lastPrimaryPage, usePageState } from "@/store/pageMemory";
 import { useResearchStore } from "@/store/research";
 import {
   kindLabels,
+  phaseLabels,
   publishLabels,
   runLabels,
   stepLabels,
@@ -47,7 +48,6 @@ import {
   EmptyMedia,
   EmptyTitle
 } from "@/ui/empty";
-import { Progress } from "@/ui/progress";
 import { ScrollArea } from "@/ui/scroll-area";
 import {
   Select,
@@ -71,7 +71,8 @@ function parameterObject(value: string | undefined): Record<string, unknown> {
 
 function asObject(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown> : {};
+    ? value as Record<string, unknown>
+: {};
 }
 
 function parameterRows(params: Record<string, unknown>, prefix = ""): [string, string][] {
@@ -81,7 +82,7 @@ function parameterRows(params: Record<string, unknown>, prefix = ""): [string, s
       if (Object.keys(value).length === 0) return [[name, "无"]];
       return parameterRows(Array.isArray(value) ? Object.fromEntries(value.map((item, index) => [index + 1, item])) : asObject(value), name);
     }
-    return [[name, value == null ? "未设置" : typeof value === "boolean" ? (value ? "是" : "否") : String(value)]];
+    return [[name, value === null || value === undefined ? "未设置" : typeof value === "boolean" ? value ? "是" : "否" : String(value)]];
   });
 }
 
@@ -178,7 +179,7 @@ function ProjectDetail({
     version?.retired && version.retiredReason
   ].filter((reason): reason is string => !!reason))];
   useEffect(() => {
-    if (version?.status !== "success") return;
+    if (version?.status !== "success") return undefined;
     const controller = new AbortController();
     setReport(null);
     setReportError("");
@@ -321,34 +322,34 @@ function ProjectDetail({
                   <section className="space-y-2">
                     <h2 className="flex items-center gap-2 font-semibold">
                       <FileArchive className="size-4 text-muted-foreground" />
-                      {version.publishStatus === "published"
-                        ? "已发布包"
-                        : "候选包"}
+                      {version.publishStatus === "published" ? "已发布包" : "候选包"}
                     </h2>
-                    <p className="break-all font-mono">
-                      solo_{project.id.replace(/-/g, "_")}-0.1.{version.number}
-                      -py3-none-any.whl
-                    </p>
-                    <p className="text-muted-foreground">148 KB</p>
+                    {version.artifact
+? <>
+                      <p className="break-all font-mono">{version.artifact.package} · {version.artifact.version}</p>
+                      <Button asChild variant="link" className="h-auto max-w-full justify-start p-0 text-xs">
+                        <a className="break-all whitespace-normal font-mono" href={artifactWheelUrl(version.artifactId ?? version.artifact.id)} download>{version.artifact.filename}</a>
+                      </Button>
+                      <p className="text-muted-foreground">{artifactSize(version.artifact.size ?? version.artifact.sizeBytes)}</p>
+                      <p className="break-all font-mono text-muted-foreground" title="SHA256">SHA256 {version.artifact.sha256}</p>
+                      {version.artifact.entry && <p className="break-all font-mono text-muted-foreground">Entry {version.artifact.entry}</p>}
+                    </>
+: <>
+                      {version.packageVersion && <p className="font-mono">包版本 {version.packageVersion}</p>}
+                      <p className="text-muted-foreground">暂无已登记的包元数据</p>
+                    </>}
+                    {version.publishStatus === "published" && <Button asChild variant="link" className="h-auto p-0 text-xs"><Link to="/artifacts">查看独立已发布成果</Link></Button>}
                   </section>
-                  <Separator />
-                  <section className="space-y-2">
-                    <h2 className="flex items-center gap-2 font-semibold">
-                      <FileCode2 className="size-4 text-muted-foreground" />
-                      源码快照
-                    </h2>
-                    <p className="font-mono">source-v{version.number}.tar.gz</p>
-                    <p className="text-muted-foreground">86 KB</p>
-                  </section>
-                  <Separator />
-                  <section className="space-y-2">
-                    <h2 className="flex items-center gap-2 font-semibold">
-                      <FileText className="size-4 text-muted-foreground" />
-                      运行清单
-                    </h2>
-                    <p className="font-mono">manifest.json</p>
-                    <p className="text-muted-foreground">4 KB</p>
-                  </section>
+                  {!!version.files?.length && <>
+                    <Separator />
+                    <section className="space-y-2">
+                      <h2 className="flex items-center gap-2 font-semibold"><FileText className="size-4 text-muted-foreground" />运行产物</h2>
+                      {version.files.map((file) => <div key={file.name} className="space-y-1">
+                        {file.url ? <a href={file.url} download className="break-all font-mono text-primary underline underline-offset-4">{file.name}</a> : <p className="break-all font-mono">{file.name}</p>}
+                        <p className="text-muted-foreground">{artifactSize(file.size)}</p>
+                      </div>)}
+                    </section>
+                  </>}
                 </TabsContent>
               </ScrollArea>
             </Tabs>
@@ -380,7 +381,7 @@ function ProjectDetail({
             <AlertTitle>版本已退役</AlertTitle>
             <AlertDescription>
               {retiredReasons.map((reason) => <p key={reason}>{reason}</p>)}
-              <p>历史报告、产物、日志及 Jupyter 仍可查看；不能保存新研究版本、发布或用于新策略。退役项目仅可修改描述注释，归档操作仍可使用。</p>
+              <p>历史报告、产物、日志及 Jupyter 仍可查看；不能保存新研究版本、发布或用于新策略。退役项目仅可修改描述注释，仍可永久删除项目；已发布成果及独立下游不受删除影响。</p>
             </AlertDescription>
           </Alert>
         )}
@@ -443,29 +444,41 @@ function VersionActions({
 }) {
   const publish = useResearchStore((state) => state.publishVersion);
   const [confirmVersion, setConfirmVersion] = useState<string | null>(null);
-  const retired = !!(project.retired || version.retired);
+  const [publishing, setPublishing] = useState(false);
+  const [publishError, setPublishError] = useState("");
+  const retired = !!(project.retired || version.retired || version.artifact?.retired);
+  const checking = publishing || version.publishStatus === "checking";
+  const acceptedPublication = version.publishStatus === "published";
+  const failure = acceptedPublication ? "" : publishError || (version.publishStatus === "failed" ? version.publishError : "");
   return (
     <div className="space-y-3 border-t p-4" aria-live="polite">
-      {!retired && confirmVersion === version.id && (
+      {!retired && !acceptedPublication && confirmVersion === version.id && (
         <Alert>
           <AlertTitle>发布 v{version.number}？</AlertTitle>
           <AlertDescription>
-            发布后，此版本可供下游项目选择。
+            发布后，冻结包及依赖将进入独立成果目录，可供下游项目和策略选择；删除源项目不会移除已发布成果。
             <div className="mt-3 flex gap-2">
               <Button
                 size="sm"
-                disabled={retired}
-                onClick={() => {
-                  if (retired) return;
-                  setConfirmVersion(null);
-                  publish(project.id, version.id);
+                disabled={retired || checking}
+                onClick={async () => {
+                  if (retired || checking || acceptedPublication) return;
+                  setPublishing(true);
+                  setPublishError("");
+                  try {
+                    await publish(project.id, version.id);
+                    setConfirmVersion(null);
+                  } catch (cause) {
+                    setPublishError(cause instanceof Error ? cause.message : "发布失败，请重试");
+                  } finally { setPublishing(false); }
                 }}
               >
-                确认发布
+                {checking ? <><LoaderCircle className="animate-spin" />发布中…</> : publishError ? "重试发布" : "确认发布"}
               </Button>
               <Button
                 size="sm"
                 variant="outline"
+                disabled={checking}
                 onClick={() => setConfirmVersion(null)}
               >
                 取消
@@ -474,11 +487,11 @@ function VersionActions({
           </AlertDescription>
         </Alert>
       )}
-      {version.publishStatus === "failed" && (
+      {failure && (
         <Alert variant="destructive">
           <CircleAlert />
           <AlertTitle>发布失败</AlertTitle>
-          <AlertDescription>{version.publishError}</AlertDescription>
+          <AlertDescription className="whitespace-pre-wrap break-words">{failure}</AlertDescription>
         </Alert>
       )}
       <div className="flex items-center gap-2">
@@ -488,8 +501,8 @@ function VersionActions({
               className="w-full"
               disabled={
                 retired ||
-                version.publishStatus === "published" ||
-                version.publishStatus === "checking" ||
+                acceptedPublication ||
+                checking ||
                 !!confirmVersion
               }
               variant={
@@ -497,7 +510,7 @@ function VersionActions({
               }
               onClick={() => { if (!retired) setConfirmVersion(version.id); }}
             >
-              {version.publishStatus === "checking"
+              {checking
 ? (
                 <LoaderCircle className="animate-spin" />
               )
@@ -508,7 +521,7 @@ function VersionActions({
 : null}
               {version.publishStatus === "published"
                 ? "已发布"
-                : version.publishStatus === "checking"
+                : checking
                   ? "发布校验中"
                   : "发布版本"}
             </Button>
@@ -549,14 +562,7 @@ function ExecutionState({
           工作流 #{version.workflowId}
         </span>
       </div>
-      {version.status === "running" && (
-        <div className="space-y-2">
-          <Progress value={50} aria-label="研究进度" />
-          <p className="text-xs text-muted-foreground">
-            已处理 180 / 363 个交易日
-          </p>
-        </div>
-      )}
+      {version.phase && <p className="text-xs text-muted-foreground">当前状态：{phaseLabels[version.phase] ?? version.phase}</p>}
       <div className="grid gap-3 sm:grid-cols-3">
         {(Object.keys(stepLabels) as TaskStep[]).map((step) => {
           const status = stepState(version, step);

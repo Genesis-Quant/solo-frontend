@@ -96,13 +96,15 @@ function elements(tree, type) {
 function dialogOptions(modelVersion, downstreamVersions) {
   const projects = [project("model", "model", modelVersion), project("model", "unsupported", "2.1.0"),
     ...downstreamVersions.map((version, index) => project("optimize", `optimize-${index}`, version, "1.0.0"))];
-  const state = ["", { model: "model-version", optimize: null, control: null, execution: null }, null, 0, false, ""];
+  const artifacts = projects.map((record) => ({ id: `${record.id}-artifact`, kind: record.kind, package: record.id, version: "1.1.1",
+    publishedAt: "2026-10-07", schemeVersion: record.versions[0].dependencies[0].version, sourceProjectName: record.name }));
+  const state = ["", { artifacts: { model: "model-artifact" } }, null, 0, false, ""];
   let index = 0;
   const { default: StrategyDialog } = load("../src/components/modal/StrategyDialog.tsx", {
     react: { ...require("react"), useState: () => [state[index++], () => { throw new Error("Read-only render"); }] },
     "@/assets/lib/request": { client: {} },
     "@/assets/lib/scheme": scheme,
-    "@/store/research": { useResearchStore: (selector) => selector({ projects }) },
+    "@/hooks/usePublishedArtifacts": { usePublishedArtifacts: () => ({ artifacts, loaded: true, refreshing: false, error: "", reload() {} }) },
     "@/types/research": { kindLabels: {} },
     "@/types/strategy": { strategyStages: ["model", "optimize", "control", "execution"] },
     "@/components/field/SchemaFields": { __esModule: true, default: "SchemaFields" }
@@ -116,12 +118,12 @@ function dialogOptions(modelVersion, downstreamVersions) {
 
 test("strategy dialog filters by actual Scheme series, allowing newer and older patches", () => {
   const options = dialogOptions("1.1.7", ["1.1.0", "1.1.9", "1.0.7", "1.2.0", "2.1.0", "invalid"]);
-  assert.deepEqual(options["strategy-model"], ["model-version"]);
-  assert.deepEqual(options["strategy-optimize"], ["default", "optimize-0-version", "optimize-1-version"]);
+  assert.deepEqual(options["strategy-model"], ["model-artifact"]);
+  assert.deepEqual(options["strategy-optimize"], ["default", "optimize-0-artifact", "optimize-1-artifact"]);
 });
 
 test("older model patch can select a newer downstream patch", () => {
-  assert.deepEqual(dialogOptions("1.1.0", ["1.1.7"])["strategy-optimize"], ["default", "optimize-0-version"]);
+  assert.deepEqual(dialogOptions("1.1.0", ["1.1.7"])["strategy-optimize"], ["default", "optimize-0-artifact"]);
 });
 
 test("an invalid selected Scheme version never matches invalid downstream versions", () => {

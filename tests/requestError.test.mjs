@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { AxiosError, CanceledError } from "axios";
-import { normalizeRequestError } from "../src/assets/lib/requestError.ts";
+import { normalizeRequestError, RequestError } from "../src/assets/lib/requestError.ts";
 
 function httpError(data, status = 502) {
   const config = {
@@ -114,6 +114,44 @@ test("Axios setup errors are not mislabeled as network failures or exposed verba
     headers: { Authorization: "Bearer secret-token" }
   });
   assert.equal(normalizeRequestError(error).message, "Solo 服务请求失败");
+});
+
+for (const [format, encode] of [["JSON object", (data) => data], ["text JSON", JSON.stringify]]) {
+  test(`${format} lifecycle failures retain whitelisted metadata without raw secrets`, () => {
+    const error = normalizeRequestError(httpError(encode({ detail: {
+      code: "project_cleanup_incomplete", reason: "运行资源清理失败", deleted: true, id: "old-uuid",
+      status: "secret server field", input: "secret input", config: { token: "secret token" },
+      paths: ["secret private path"], headers: { Authorization: "secret authorization" }, arbitrary: "secret data"
+    } }), 500));
+    assert.ok(error instanceof RequestError);
+    assert.equal(error.message, "运行资源清理失败");
+    assert.equal(error.status, 500);
+    assert.equal(error.code, "project_cleanup_incomplete");
+    assert.equal(error.reason, "运行资源清理失败");
+    assert.equal(error.deleted, true);
+    assert.equal(error.id, "old-uuid");
+    assert.equal(error.response, undefined);
+    assert.equal(error.config, undefined);
+    assert.equal(error.detail, undefined);
+    assert.doesNotMatch(JSON.stringify(error), /secret|private|authorization/);
+  });
+}
+
+test("structured publication conflict and busy-source errors preserve status/code/reason", () => {
+  for (const code of ["artifact_release_conflict", "active_kernel", "active_task"]) {
+    const error = normalizeRequestError(httpError({ detail: { code, reason: "请先完成当前操作", message: "无法完成请求" } }, 409));
+    assert.equal(error.message, "无法完成请求");
+    assert.equal(error.reason, "请先完成当前操作");
+    assert.equal(error.code, code);
+    assert.equal(error.status, 409);
+  }
+});
+
+test("structured metadata rejects invalid field types without stringifying private data", () => {
+  const error = normalizeRequestError(httpError({ detail: { message: {}, reason: [], code: {}, deleted: "true", id: { private: "secret" } } }, 422));
+  assert.equal(error.message, "Solo 服务请求失败（HTTP 422）");
+  for (const key of ["reason", "code", "deleted", "id"]) assert.equal(error[key], undefined);
+  assert.doesNotMatch(JSON.stringify(error), /secret/);
 });
 
 test("non-Axios thrown values remain unchanged", () => {

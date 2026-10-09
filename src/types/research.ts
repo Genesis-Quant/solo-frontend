@@ -1,3 +1,5 @@
+import type { ResearchArtifact } from "@/types/artifact";
+
 export const projectKinds = [
   "factor",
   "model",
@@ -19,6 +21,12 @@ export interface TemplateVersion {
 export interface ResearchVersion {
   id: string;
   number: number;
+  packageVersion?: string | null;
+  /** Raw server lifecycle phase (building, queued, running, submit_failed, …). */
+  phase?: string;
+  artifactId?: string | null;
+  artifact?: ResearchArtifact | null;
+  files?: { name: string; size?: number | null; url?: string | null }[];
   note: string;
   submittedAt: string;
   status: RunStatus;
@@ -45,7 +53,8 @@ export interface ResearchProject {
   algoCommit?: string;
   directory?: string;
   updatedAt: string;
-  archived: boolean;
+  /** Legacy migration flag only; new deletions remove records. */
+  archived?: boolean;
   retired?: boolean;
   retiredReason?: string | null;
   versions: ResearchVersion[];
@@ -63,6 +72,15 @@ export const runLabels: Record<RunStatus, string> = {
   success: "研究成功",
   running: "运行中",
   failed: "研究失败"
+};
+
+export const phaseLabels: Record<string, string> = {
+  building: "构建中",
+  queued: "排队中",
+  running: "运行中",
+  success: "研究成功",
+  failed: "研究失败",
+  submit_failed: "提交失败"
 };
 
 export const publishLabels: Record<PublishStatus, string> = {

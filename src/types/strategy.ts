@@ -1,10 +1,24 @@
 export const strategyStages = ["model", "optimize", "control", "execution"] as const;
 export type StrategyStage = typeof strategyStages[number];
-export type StrategySelection = Record<StrategyStage, string | null>;
+/** Published roots; omitted stages retain the backend defaults. Legacy version IDs are separate. */
+export interface StrategySelection {
+  artifacts: Partial<Record<StrategyStage, string>>;
+  model?: string | null;
+  optimize?: string | null;
+  control?: string | null;
+  execution?: string | null;
+}
 export interface StrategyRecord {
   id: string;
   name: string;
-  components: Record<StrategyStage, { label: string; version_id: string | null }>;
+  components: Record<StrategyStage, {
+    label: string;
+    version_id: string | null;
+    artifact_id?: string | null;
+    source_project_id?: string | null;
+    source_project_name?: string | null;
+    source_version_id?: string | null;
+  }>;
   forms: Record<StrategyStage, Record<string, unknown>>;
   status: string;
   error: string;

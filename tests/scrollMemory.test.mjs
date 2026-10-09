@@ -237,7 +237,7 @@ const appCompiled = ts.transpileModule(readFileSync(appPath, "utf8"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX }
 }).outputText;
 function workbenchFixture(strategyStore) {
-  const research = { loading: false, error: "", loadProjects() {} };
+  const research = { loaded: true, loading: false, error: "", loadProjects() {} };
   const strategies = { loaded: false, records: [], error: "" };
   const leaf = ({ children }) => React.createElement("div", null, children);
   const overrides = {
@@ -251,7 +251,7 @@ function workbenchFixture(strategyStore) {
     "@/ui/skeleton": { Skeleton: leaf },
     "motion/react": { MotionConfig: leaf }
   };
-  for (const name of ["ProjectsPage", "ProjectPage", "TasksPage", "StrategiesPage", "StrategyPage", "EmbeddedReportPage"]) {
+  for (const name of ["ProjectsPage", "ProjectPage", "ArtifactsPage", "TasksPage", "StrategiesPage", "StrategyPage", "EmbeddedReportPage"]) {
     overrides[`@/views/${name}`] = { default: () => React.createElement("section", { "data-page": name }) };
   }
   const module = { exports: {} };
@@ -289,12 +289,16 @@ test("Workbench waits for strategy data on strategy/task lists but still mounts 
 test("Workbench research placeholders remain unavailable until the real route returns", () => {
   const app = workbenchFixture();
   app.strategies.loaded = true;
-  app.research.loading = true;
+  app.research.loading = true; app.research.loaded = false;
   assert.equal(app.render("/tasks").ready, false);
   app.research.loading = false; app.research.error = "offline";
   assert.equal(app.render("/tasks").ready, false);
-  app.research.error = "";
+  assert.match(app.render("/artifacts").html, /data-page="ArtifactsPage"/, "independent registry must not be hidden by project errors");
+  app.research.error = ""; app.research.loaded = true;
   assert.equal(app.render("/tasks").ready, true);
+  app.research.error = "refresh failed";
+  assert.equal(app.render("/tasks").ready, true, "background errors retain cached routes and deletion retries");
+  assert.match(app.render("/projects/model").html, /data-page="ProjectsPage"/);
 });
 
 test("Workbench preserves a definite-height route container for desktop project panes", () => {

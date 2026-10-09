@@ -7,6 +7,7 @@ import {
   FlaskConical,
   ListTodo,
   Moon,
+  Package,
   PanelLeftClose,
   PanelLeftOpen,
   ShieldCheck,
@@ -76,7 +77,9 @@ export default function AppLayout({ children, contentReady = true }: { children:
     ? { label: kindLabels[kind], to: `/projects/${kind}` }
     : pathname.startsWith("/strategies")
       ? { label: "策略组装", to: "/strategies" }
-      : { label: "全部任务", to: "/tasks" };
+      : pathname === "/artifacts"
+        ? { label: "已发布成果", to: "/artifacts" }
+        : { label: "全部任务", to: "/tasks" };
   const detail = project?.name ?? (pathname.startsWith("/strategies/") ? strategy?.name ?? "策略详情" : undefined);
   const theme = useAppStore((state) => state.theme);
   const setTheme = useAppStore((state) => state.setTheme);
@@ -129,6 +132,7 @@ export default function AppLayout({ children, contentReady = true }: { children:
           <Separator className="mx-auto w-[calc(100%-24px)]" />
           <SidebarGroup>
             <SidebarMenu className="gap-1.5">
+              <NavItem active={pathname === "/artifacts"} icon={Package} label="发布成果" to="/artifacts" />
               <NavItem active={pathname.startsWith("/strategies")} icon={Blocks} label="策略组装" to="/strategies" />
               <NavItem active={pathname === "/tasks"} icon={ListTodo} label="全部任务" to="/tasks" />
             </SidebarMenu>

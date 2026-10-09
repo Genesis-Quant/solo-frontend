@@ -17,8 +17,15 @@ export function stepState(
   version: ResearchVersion,
   step: TaskStep
 ): "success" | "running" | "failed" | "pending" {
-  if (step === "environment" || version.status === "success") return "success";
+  if (version.status === "success") return "success";
+  if (step === "environment") {
+    if (version.phase === "building") return "running";
+    if (version.phase === "submit_failed") return "failed";
+    if (version.phase === "queued" || version.phase === "running") return "success";
+    return "pending";
+  }
   if (step === "report") return "pending";
+  if (version.phase === "building" || version.phase === "queued" || version.phase === "submit_failed") return "pending";
   return version.status;
 }
 

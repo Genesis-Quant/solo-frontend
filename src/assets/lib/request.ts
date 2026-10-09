@@ -18,5 +18,5 @@ export const client = {
   get: <T>(url: string) => request<T>({ method: "GET", url, timeout: 60000 }),
   post: <T>(url: string, data: unknown) => request<T>({ method: "POST", url, data, timeout: 660000 }),
   patch: <T>(url: string, data: unknown) => request<T>({ method: "PATCH", url, data, timeout: 660000 }),
-  delete: (url: string) => request<void>({ method: "DELETE", url })
+  delete: (url: string) => request<void>({ method: "DELETE", url, timeout: 120000 })
 };

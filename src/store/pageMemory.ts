@@ -7,6 +7,7 @@ import { kindLabels, projectKinds } from "@/types/research";
 /** 一级页面：侧栏直达的列表页，离开后需要保留筛选、分页、排序和滚动位置。 */
 export const primaryPages: { path: string; label: string }[] = [
   ...projectKinds.map((kind) => ({ path: `/projects/${kind}`, label: kindLabels[kind] })),
+  { path: "/artifacts", label: "已发布成果" },
   { path: "/strategies", label: "策略组装" },
   { path: "/tasks", label: "全部任务" }
 ];

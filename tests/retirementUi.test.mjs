@@ -75,10 +75,17 @@ function project(id, kind = "model", scheme = "1.2.0", overrides = {}, versionOv
 }
 const forms = Object.fromEntries(stageNames.map((kind) => [kind, { schema: { properties: {} }, values: {} }]));
 
-function fixture(relative, { projects = [], props = {}, selectedVersion, get, post, report } = {}) {
+function fixture(relative, { projects = [], artifacts = projects.flatMap((record) => record.versions.map((version) => ({
+  id: `${record.id}-artifact`, kind: record.kind, package: `${record.kind}-1234`, version: "1.2.1",
+  sha256: "a".repeat(64), filename: "actual.whl", entry: "algo:entry", sources: {}, dependencies: {},
+  schemeVersion: version.dependencies.find((dependency) => dependency.name === "scheme")?.version,
+  sourceProjectId: record.id, sourceProjectName: record.name, sourceVersionId: version.id,
+  publishedAt: record.archived ? null : "2026-10-07T00:00:00Z",
+  retired: record.retired || version.retired, retiredReason: record.retiredReason || version.retiredReason
+}))), props = {}, selectedVersion, get, post, report } = {}) {
   const slots = [], requests = [], edits = [], creates = [], publishes = [], selected = [];
   let cursor = 0, effects = [], tree, queued = false, closed = false;
-  const state = { projects,
+  const state = { projects, artifacts,
     createProject: async (...args) => { creates.push(args); return "created-project"; },
     editProject: async (...args) => { edits.push(args); },
     publishVersion: (...args) => { publishes.push(args); }
@@ -119,6 +126,7 @@ function fixture(relative, { projects = [], props = {}, selectedVersion, get, po
       post(url, body) { requests.push(["post", url, body]); assert.ok(post, `Unexpected mock request: ${url}`); return Promise.resolve(post(url, body)); }
     } },
     "@/store/research": { useResearchStore: (selector) => selector(state) },
+    "@/hooks/usePublishedArtifacts": { usePublishedArtifacts: () => ({ artifacts: state.artifacts, loaded: true, refreshing: false, error: "", reload() {} }) },
     "@/store/pageMemory": { usePageState: (_scope, _key, initial) => hooks.useState(initial), lastPrimaryPage: () => "/models" },
     "@/assets/lib/prototype": { defaultDownstream: Object.fromEntries(["factor", ...stageNames].map((kind) => [kind, []])), stepState: () => "success" },
     "@/components/field/SchemaFields": { __esModule: true, default: () => null },
@@ -171,17 +179,17 @@ function oldReport(reports, _version, kind) {
   }, "/historical/report", kind);
 }
 
-test("strategy dialog excludes retired projects and versions across every stage, preserving undefined flags", async () => {
+test("strategy dialog excludes retired and unpublished artifacts across every stage, preserving undefined flags", async () => {
   const projects = stageNames.flatMap((kind) => [
     project(`${kind}-active`, kind), project(`${kind}-retired-project`, kind, "1.2.0", { retired: true }),
     project(`${kind}-retired-version`, kind, "1.2.0", {}, { retired: true }), project(`${kind}-archived`, kind, "1.2.0", { archived: true })
   ]);
   const app = strategy({ projects });
   try {
-    assert.deepEqual(app.options("strategy-model"), ["model-active-version"]);
-    app.select("strategy-model").props.onValueChange("model-active-version");
+    assert.deepEqual(app.options("strategy-model"), ["model-active-artifact"]);
+    app.select("strategy-model").props.onValueChange("model-active-artifact");
     await app.settle();
-    for (const kind of stageNames.slice(1)) assert.deepEqual(app.options(`strategy-${kind}`), ["default", `${kind}-active-version`]);
+    for (const kind of stageNames.slice(1)) assert.deepEqual(app.options(`strategy-${kind}`), ["default", `${kind}-active-artifact`]);
     assert.doesNotMatch(app.html(), /retired-project|retired-version|archived/);
     assert.deepEqual(app.requests, []);
   } finally { app.close(); }
@@ -205,9 +213,9 @@ test("actual Scheme series wins over declared project tags and permits different
     project("wrong-series", "optimize", "1.2.7", {}, { dependencies: [{ name: "scheme", version: "1.0.1" }] })
   ] });
   try {
-    app.select("strategy-model").props.onValueChange("model-version");
+    app.select("strategy-model").props.onValueChange("model-artifact");
     await app.settle();
-    assert.deepEqual(app.options("strategy-optimize"), ["default", "older-version", "newer-version"]);
+    assert.deepEqual(app.options("strategy-optimize"), ["default", "older-artifact", "newer-artifact"]);
     assert.match(app.html(), /Scheme 1.2.7/);
   } finally { app.close(); }
 });
@@ -216,14 +224,14 @@ test("a model retired after selection cannot request Forms even through a direct
   const record = project("model");
   const app = strategy({ projects: [record] });
   try {
-    app.select("strategy-model").props.onValueChange("model-version");
+    app.select("strategy-model").props.onValueChange("model-artifact");
     await app.settle();
-    record.retired = true;
+    app.state.artifacts[0].retired = true;
     app.render();
     await app.submit();
     await app.settle();
     assert.equal(app.elements("Button").find((button) => button.props.type === "submit").props.disabled, true);
-    assert.match(app.text(), /所选研究版本已退役/);
+    assert.match(app.text(), /所选已发布成果已退役/);
     assert.deepEqual(app.requests, []);
   } finally { app.close(); }
 });
@@ -232,17 +240,17 @@ test("retirement after Forms have loaded blocks final strategy creation, not jus
   const downstream = project("optimize", "optimize");
   const app = strategy({ projects: [project("model"), downstream], post(url) { assert.equal(url, "/strategies/forms"); return forms; } });
   try {
-    app.select("strategy-model").props.onValueChange("model-version");
+    app.select("strategy-model").props.onValueChange("model-artifact");
     await app.settle();
-    app.select("strategy-optimize").props.onValueChange("optimize-version");
+    app.select("strategy-optimize").props.onValueChange("optimize-artifact");
     await app.settle();
     for (let step = 0; step < 4; step++) { await app.submit(); await app.settle(); }
-    downstream.versions[0].retired = true;
+    app.state.artifacts[1].retired = true;
     app.render();
     assert.equal(app.button("创建并回测").props.disabled, true);
     await app.submit();
     await app.settle();
-    assert.match(app.text(), /所选研究版本已退役/);
+    assert.match(app.text(), /所选已发布成果已退役/);
     assert.deepEqual(app.requests.map(([method, url]) => [method, url]), [["post", "/strategies/forms"]]);
   } finally { app.close(); }
 });
@@ -298,7 +306,7 @@ test("a retired project without runs shows retirement help rather than encouragi
   } finally { app.close(); }
 });
 
-test("records with undefined retirement flags preserve the existing mock publish flow", async () => {
+test("records with undefined retirement flags preserve the publication confirmation flow", async () => {
   const record = project("legacy");
   const app = detail(record, { report: oldReport });
   try {
