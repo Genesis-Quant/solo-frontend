@@ -20,7 +20,71 @@ npm run build
 
 运行记录提供 `reportPath`（相对于共享 runs 目录的输出目录），前端读取 `/api/v1/reports/{reportPath}/run.json` 及其中声明的 Parquet。报告版本取自该次实际运行，与项目创建时的版本无关；未关联真实目录的记录不会显示示例报告。
 
+## DuckDB 本地扩展
+
+报告页的 DuckDB Worker、主 WASM 和 Parquet 扩展均随前端部署，不向 `extensions.duckdb.org` 发起运行时下载。`public/duckdb-extensions/v1.5.4/` 保存 EH 与 MVP 两个平台的签名扩展，`src/assets/duckdb-extensions.json` 记录对应 npm/Core 版本、官方来源、字节数及 SHA256。现有资源复用本机历史官方缓存的原始字节，并由 DuckDB 校验签名和版本；没有启用 unsigned 或 metadata-mismatch 选项。
+
+初始化显式配置同源扩展仓库并 `LOAD parquet`，关闭自动安装和自动加载；本地资源缺失时直接显示部署错误，不回退到外部下载。`@duckdb/duckdb-wasm` 精确固定为 `1.33.1-dev57.0`。`npm run verify:duckdb` 验证包版本和扩展校验值，开发启动、生产构建与 Docker 镜像构建均运行该检查。升级 DuckDB 必须同步更新两个平台的扩展和清单，保持签名校验开启。
+
+Vite 将整个 `public` 目录复制到 `dist`；静态部署时应一起发布 `dist/duckdb-extensions`，Docker 镜像也包含它。此配置覆盖工作台和 Notebook iframe，不改写已有 Scheme 独立 HTML 中冻结的报告资源。
+
 ## Notebook iframe
+
+iframe 复用工作台的 `ResearchReport`、图表和同源 DuckDB 签名 Parquet 扩展，不加载工作台导航、项目列表或轮询，不内嵌 data URL、token 或 `srcdoc`，也不修改 Scheme 既有独立 `to_html()`。
+
+### Notebook 清单（Jupyter 文件源）
+
+`report.show()` 的 Jupyter display bridge 使用浏览器可访问的前端 URL：
+
+```text
+http://127.0.0.1:5174/embed/report?source=jupyter&path=projects/factor/X/reports/<uuid>/report.json&theme=light
+```
+
+- `source=jupyter`：与旧运行报告入口独立，不需要 `project` 或 `version`；Scheme 版本仅取自清单。
+- `path`：相对于 Jupyter root（通常 `/shared`）的 `report.json` 路径；拒绝绝对路径、URL、空段、`.`、`..`、反斜线、冒号及 NUL。每个路径段单独编码后请求同源 `/jupyter/solo/files/<path>`。
+- `theme`：可选 `light` 或 `dark`，未传时使用清单主题；只影响 iframe，不持久化工作台偏好。
+
+清单是轻量 JSON，不含 Parquet 内容，例如：
+
+```json
+{
+  "protocol": 1,
+  "format": "solo-notebook-report",
+  "schemeVersion": "1.2.3",
+  "kind": "factor",
+  "theme": "light",
+  "annualTradingDays": 252,
+  "riskFreeRate": 0,
+  "files": {
+    "information_coefficient": "information_coefficient.parquet",
+    "group_returns": "group_returns.parquet"
+  },
+  "parameters": {
+    "factor_columns": ["momentum"],
+    "return_columns": ["return_1"],
+    "return_specs": { "return_1": { "kind": "simple", "periods": 1 } },
+    "n_groups": 5,
+    "n_select": 10
+  }
+}
+```
+
+当前只支持 Scheme 1.x；必需文件与现有 v1 运行报告一致：因子需要 `information_coefficient`、`group_returns`，回测需要 `daily_portfolios`、`trade_details`、`daily_positions`、`daily_trading_statistics`。文件名只能是清单同目录下非隐藏、安全的 `.parquet` 文件名，不能包含路径、URL 或 `..`。`annualTradingDays` 必须为正整数，`riskFreeRate` 必须有限；`parameters` 仅用于 factor，因子列和收益列非空且不重复，收益规格一一对应（`simple` 或 `log`、正整数持有期），分组数及选股数为正整数。缺少元数据不猜测默认值。
+
+### Jupyter 同源代理与登录
+
+Vite 开发服务器增加 `/jupyter` 代理并去掉该前缀，不改变 `/api` 后端代理：
+
+- `SOLO_JUPYTER_API_URL`：固定上游地址，默认 `http://127.0.0.1:8888`；容器内可设为 `http://jupyter:8888`。
+- `SOLO_JUPYTER_BROWSER_URL`：用户实际登录的 Jupyter URL，默认 `http://127.0.0.1:8888`；代理使用其 `host` 作为上游 `Host`，以匹配 Jupyter 的签名认证 Cookie。
+
+请先在同一浏览器登录 Jupyter，并保持前端与 Jupyter 的浏览器 hostname 一致（不要混用 `localhost` 与 `127.0.0.1`），这样 Cookie 能跨端口转发。文件 GET 从 `document.cookie` 解码 `_xsrf`，仅对本地 `/jupyter/` URL 添加 `X-XSRFToken`；不会把服务端 `JUPYTER_TOKEN` 注入请求。清单和 Parquet 的重定向、登录页或 HTML 响应会显示明确登录提示，不回退到独立 HTML。
+
+文件下载 anchor 没有 XSRF header，代理仅当 Referer origin 与传入请求的前端 Host/协议严格一致时，将它改写为 Jupyter 浏览器 origin 加原路径及查询。跨站或非法 Referer 不改写，Origin 原样转发，仍由 Jupyter 做来源、认证和文件权限检查；不开放匿名访问，也不绕过跨站 Origin 校验。
+
+生产静态部署必须在前端的同源服务配置 `/jupyter/` 反向代理：固定上游为已部署的 Jupyter，剥离 `/jupyter` 前缀，设置浏览器 Jupyter Host，转发浏览器 Cookie 和 XSRF header，并按上述同源条件改写下载 Referer（HTTPS 前端应使用可信的外部 frontend origin 判断）。不要无条件改写 Origin/跨站 Referer、添加服务端 token 或允许 URL 参数选择代理目标。Vite `server.proxy` 不会进入静态 `dist`；部署时还需保留 `/embed/report` 的 SPA 回退及 `dist/duckdb-extensions` 本地资源。跨 hostname 部署应由同源 Jupyter 登录建立会话，不以关闭认证解决 Cookie 问题。
+
+### 原运行清单入口（保持兼容）
 
 `/embed/report?project=factor&version=1.0.0&path=<run-id>/report` 只展示报告，不加载工作台导航、项目列表和轮询。
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { loadReportPath, type ReportData, type ReportProjectKind } from "@/assets/lib/reports";
+import { loadNotebookReport } from "@/assets/lib/notebookReports";
 import ResearchReport from "@/components/panel/ResearchReport";
 import { useAppStore } from "@/store";
 import { projectKinds, type ProjectKind } from "@/types/research";
@@ -15,30 +16,38 @@ export default function EmbeddedReportPage() {
 }
 
 function EmbeddedReport({ params }: { params: URLSearchParams }) {
-  const [report, setReport] = useState<ReportData | null>(null);
+  const [report, setReport] = useState<(ReportData & { theme?: "light" | "dark" }) | null>(null);
   const [error, setError] = useState("");
+  const source = params.get("source");
   const project = params.get("project");
   const version = params.get("version");
   const path = params.get("path");
   const theme = params.get("theme");
+  const resolvedTheme = theme ?? (source === "jupyter" ? report?.theme : undefined);
 
   useEffect(() => {
     const controller = new AbortController();
-    if (!projectKinds.includes(project as ProjectKind) && project !== "strategy") {
+    let request: Promise<ReportData> | undefined;
+    if (source === "jupyter") {
+      if (!path) setError("请提供相对于 Jupyter root 的 report.json 路径 path");
+      else if (theme !== null && theme !== "light" && theme !== "dark") setError("theme 仅支持 light 或 dark");
+      else request = loadNotebookReport(path, controller.signal);
+    } else if (!projectKinds.includes(project as ProjectKind) && project !== "strategy") {
       setError("请提供有效的项目类型 project");
     } else if (!version || !path) {
       setError("请提供 Scheme 版本 version 和报告目录 path");
     } else if (theme !== null && theme !== "light" && theme !== "dark") {
       setError("theme 仅支持 light 或 dark");
     } else {
-      loadReportPath(path, project as ReportProjectKind, version, controller.signal)
-        .then((data) => { if (!controller.signal.aborted) setReport(data); })
-        .catch((reason: Error) => { if (!controller.signal.aborted) setError(reason.message); });
+      request = loadReportPath(path, project as ReportProjectKind, version, controller.signal);
     }
+    request?.then((data) => { if (!controller.signal.aborted) setReport(data); })
+      .catch((reason: unknown) => { if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason)); });
     return () => controller.abort();
-  }, [project, version, path, theme]);
+  }, [source, project, version, path, theme]);
 
   useEffect(() => {
+    const theme = resolvedTheme;
     if (theme !== "light" && theme !== "dark") return;
     const previous = useAppStore.getState().theme;
     // iframe 的显式主题只作用于当前页面，不覆盖工作台保存的偏好。
@@ -48,7 +57,7 @@ function EmbeddedReport({ params }: { params: URLSearchParams }) {
       document.documentElement.dataset.theme = previous;
       useAppStore.setState({ theme: previous });
     };
-  }, [theme]);
+  }, [resolvedTheme]);
 
   return <main className="mx-auto min-h-svh max-w-[1600px] space-y-4 p-4" aria-label="嵌入报告">
     {error ? <Alert variant="destructive" role="alert">

@@ -9,6 +9,7 @@ import viteCompression from "vite-plugin-compression";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, fileURLToPath(new URL("./", import.meta.url)), "");
+  const jupyterBrowserUrl = new URL(env.SOLO_JUPYTER_BROWSER_URL || "http://127.0.0.1:8888");
   return {
   plugins: [
     AutoImport({
@@ -48,6 +49,30 @@ export default defineConfig(({ mode }) => {
       "/api": {
         target: env.SOLO_BACKEND_URL || "http://127.0.0.1:8010",
         changeOrigin: true
+      },
+      "/jupyter": {
+        target: env.SOLO_JUPYTER_API_URL || "http://127.0.0.1:8888",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/jupyter(?=\/|$)/, ""),
+        configure(proxy) {
+          proxy.on("proxyReq", (proxyReq, req) => {
+            // Jupyter 的签名认证 Cookie 绑定浏览器访问的 Host，而非容器服务名。
+            proxyReq.setHeader("Host", jupyterBrowserUrl.host);
+            const referer = req.headers.referer;
+            if (!referer || !req.headers.host) return;
+            try {
+              const frontendProtocol = "encrypted" in req.socket && req.socket.encrypted ? "https:" : "http:";
+              const frontendOrigin = new URL(`${frontendProtocol}//${req.headers.host}`).origin;
+              const url = new URL(referer);
+              // 只改写可信同源下载的 Referer；Origin、跨站 Referer 与 Cookie 原样转发。
+              if (url.origin === frontendOrigin && !url.username && !url.password) {
+                proxyReq.setHeader("Referer", `${jupyterBrowserUrl.origin}${url.pathname}${url.search}`);
+              }
+            } catch {
+              // 非法 Referer 交给 Jupyter 自身的来源校验拒绝。
+            }
+          });
+        }
       }
     }
   },

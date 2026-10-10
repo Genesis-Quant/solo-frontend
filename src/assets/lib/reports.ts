@@ -104,6 +104,12 @@ export function reportApi(report: ReportData): ReportApi {
     output: async (_workflowId, name) => {
       const url = report.files[name];
       if (!url) throw new Error(`报告缺少 ${name}`);
+      if (url.startsWith("/jupyter/")) {
+        const { fetchNotebookFile, readNotebookParquet } = await import("./notebookReports");
+        const response = await fetchNotebookFile(url);
+        if (!response.ok) throw new Error(`报告读取失败：${name} (${response.status})`);
+        return readNotebookParquet(response);
+      }
       const response = await fetch(url);
       if (!response.ok) throw new Error(`报告读取失败：${name} (${response.status})`);
       return response.arrayBuffer();

@@ -3,6 +3,7 @@ import duckdbEhWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js
 import duckdbEhWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import duckdbMvpWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-mvp.worker.js?url";
 import duckdbMvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
+import { loadParquetExtension } from "./duckdbExtensions";
 
 const bundles: duckdb.DuckDBBundles = {
   mvp: { mainModule: duckdbMvpWasm, mainWorker: duckdbMvpWorker },
@@ -21,17 +22,26 @@ export class BrowserDuckDb {
   private constructor(private readonly database: duckdb.AsyncDuckDB, private readonly connection: duckdb.AsyncDuckDBConnection) {}
 
   static async create(files: Record<string, ArrayBuffer>) {
-    const bundle = await duckdb.selectBundle(
-      typeof __SCHEME_NOTEBOOK__ !== "undefined" && __SCHEME_NOTEBOOK__
-        ? window.__SCHEME_DUCKDB__!
-        : bundles
-    );
+    const notebook = typeof __SCHEME_NOTEBOOK__ !== "undefined" && __SCHEME_NOTEBOOK__;
+    const bundle = await duckdb.selectBundle(notebook ? window.__SCHEME_DUCKDB__! : bundles);
     if (!bundle.mainWorker) throw new Error("当前浏览器无法启动 DuckDB Worker");
     const worker = new Worker(bundle.mainWorker);
     const database = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), worker);
-    await database.instantiate(bundle.mainModule, bundle.pthreadWorker);
-    for (const [name, buffer] of Object.entries(files)) await database.registerFileBuffer(name, new Uint8Array(buffer));
-    return new BrowserDuckDb(database, await database.connect());
+    let connection: duckdb.AsyncDuckDBConnection | undefined;
+    try {
+      await database.instantiate(bundle.mainModule, bundle.pthreadWorker);
+      connection = await database.connect();
+      if (!notebook) {
+        const repository = new URL(`${import.meta.env.BASE_URL}duckdb-extensions`, window.location.href).href;
+        await loadParquetExtension(connection, await database.getVersion(), repository);
+      }
+      for (const [name, buffer] of Object.entries(files)) await database.registerFileBuffer(name, new Uint8Array(buffer));
+      return new BrowserDuckDb(database, connection);
+    } catch (error) {
+      await connection?.close().catch(() => undefined);
+      await database.terminate().catch(() => worker.terminate());
+      throw error;
+    }
   }
 
   async register(name: string, buffer: ArrayBuffer) {
