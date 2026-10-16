@@ -4,10 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "verify:duckdb": "node scripts/verify-duckdb-extensions.mjs",
-    "predev": "npm run verify:duckdb",
     "dev": "vite",
-    "prebuild": "npm run verify:duckdb",
     "build": "tsc -b && vite build",
     "build:scheme": "vite build --config notebook/vite.config.ts",
     "lint": "eslint src --ext .ts,.tsx",

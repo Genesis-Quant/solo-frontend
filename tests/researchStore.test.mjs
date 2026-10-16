@@ -141,11 +141,10 @@ function version(id = "version", overrides = {}) {
 function publishedVersion(overrides = {}) {
   const artifact = {
     id: "accepted", package: "model-1234", version: "1.2.1",
-    filename: "model_1234-1.2.1-py3-none-any.whl", size: 4321, sha256: "a".repeat(64)
-  };
+    filename: "model_1234-1.2.1-py3-none-any.whl", sizeBytes: 4321  };
   return version("version", {
     publishStatus: "published", artifactId: artifact.id, artifact,
-    files: [{ name: artifact.filename, size: artifact.size, url: `/api/v1/artifacts/${artifact.id}/wheel` }],
+    files: [{ name: artifact.filename, size: artifact.sizeBytes, url: `/api/v1/artifacts/${artifact.id}/wheel` }],
     ...overrides
   });
 }
@@ -158,7 +157,7 @@ function httpFailure(request, detail, status = 409) {
 test("publishVersion posts an empty body and accepts the updated version with real artifact metadata", async () => {
   const suite = harness();
   suite.target.versions = [version(), version("other")];
-  const artifact = { id: "published-artifact", package: "model-1234", version: "1.2.1", filename: "model_1234-1.2.1-py3-none-any.whl", size: 4321, sha256: "a".repeat(64) };
+  const artifact = { id: "published-artifact", package: "model-1234", version: "1.2.1", filename: "model_1234-1.2.1-py3-none-any.whl", sizeBytes: 4321 };
   const published = version("version", { publishStatus: "published", artifactId: artifact.id, artifact });
   const pending = suite.store.getState().publishVersion("target", "version");
   assert.equal(suite.requests[0].config.url, "/projects/target/versions/version/publish");
@@ -190,7 +189,7 @@ test("publication conflict is typed, remains local to the caller and can be retr
   assert.equal(suite.store.getState().error, "");
 });
 
-for (const operation of ["create", "edit", "delete", "publish"]) {
+for (const operation of ["create", "edit", "upgrade", "delete", "publish"]) {
   test(`a GET started before ${operation} cannot overwrite the successful mutation`, async () => {
     const suite = harness();
     suite.target.versions = [version()];
@@ -200,10 +199,12 @@ for (const operation of ["create", "edit", "delete", "publish"]) {
     let mutation;
     if (operation === "create") mutation = suite.store.getState().createProject("created", "", "model", "v1.2.0", "v1.2.0");
     if (operation === "edit") mutation = suite.store.getState().editProject("target", "renamed", "updated");
+    if (operation === "upgrade") mutation = suite.store.getState().upgradeProject("target", "scheme-next", "algo-next");
     if (operation === "delete") mutation = suite.store.getState().removeProject("target");
     if (operation === "publish") mutation = suite.store.getState().publishVersion("target", "version");
     suite.requests[1].resolve(operation === "create" ? project("created") : operation === "edit"
       ? { ...suite.target, name: "renamed", description: "updated" }
+      : operation === "upgrade" ? { ...suite.target, schemeVersion: "scheme-next", algoVersion: "algo-next" }
       : operation === "publish" ? published : undefined);
     await mutation;
     suite.requests[0].resolve(stale);
@@ -211,6 +212,12 @@ for (const operation of ["create", "edit", "delete", "publish"]) {
     const state = suite.store.getState();
     if (operation === "create") assert.equal(state.projects[0].id, "created");
     if (operation === "edit") assert.equal(state.projects.find((item) => item.id === "target").name, "renamed");
+    if (operation === "upgrade") {
+      const actual = state.projects.find((item) => item.id === "target");
+      assert.equal(actual.schemeVersion, "scheme-next");
+      assert.equal(actual.algoVersion, "algo-next");
+      assert.deepEqual(Array.from(actual.versions), [suite.target.versions[0]]);
+    }
     if (operation === "delete") assert.ok(!state.projects.some((item) => item.id === "target"));
     if (operation === "publish") {
       assert.equal(state.projects[0].versions[0], published);
@@ -390,6 +397,61 @@ test("a late publication response never resurrects a removed source", async () =
   await remove;
   suite.requests[0].resolve(version("version", { publishStatus: "published", artifactId: "accepted" }));
   await publish;
+  assert.deepEqual(Array.from(suite.store.getState().projects), [suite.retained]);
+});
+
+test("upgradeProject posts only release tags and reconciles the returned project without changing frozen history", async () => {
+  const suite = harness();
+  const saved = publishedVersion({ retired: true, retiredReason: "旧 Scheme 已退役", dependencies: [{ name: "scheme", version: "1.0.1" }], parameters: { factor: "{\"window\":20}" } });
+  suite.target.retired = true;
+  suite.target.versions = [saved, version("older", { status: "failed", phase: "failed" })];
+  const snapshot = JSON.stringify(suite.target.versions);
+  const initial = suite.store.getState();
+  const pending = initial.upgradeProject("target", "scheme-release-custom", "algo-release-custom");
+  const request = suite.requests[0];
+  assert.equal(request.url, "/api/v1/projects/target/upgrade");
+  assert.equal(request.config.method, "post");
+  assert.deepEqual(JSON.parse(request.config.data), { scheme_version: "scheme-release-custom", algo_version: "algo-release-custom" });
+  assert.equal(suite.store.getState(), initial, "no optimistic metadata or history mutation");
+  request.resolve({ ...suite.target, schemeVersion: "scheme-release-custom", schemeCommit: "new-scheme", algoVersion: "algo-release-custom", algoCommit: "new-algo", retired: false, retiredReason: null });
+  await pending;
+  const actual = suite.store.getState().projects[0];
+  assert.equal(actual.schemeCommit, "new-scheme");
+  assert.equal(actual.algoCommit, "new-algo");
+  assert.equal(actual.retired, false);
+  assert.equal(actual.versions[0], saved);
+  assert.equal(actual.versions[0].retired, true);
+  assert.equal(JSON.stringify(actual.versions), snapshot);
+  assert.equal(JSON.stringify(suite.target.versions), snapshot);
+  assert.equal(suite.store.getState().projects[1], suite.retained);
+});
+
+test("upgrade failure preserves cached state and safely propagates backend validation for retry", async () => {
+  const suite = harness();
+  const initial = suite.store.getState();
+  const pending = initial.upgradeProject("target", "same-scheme", "new-algo");
+  const rejected = assert.rejects(pending, (error) => error instanceof suite.RequestError && error.code === "project_kernel_busy" && error.message === "请先停止忙碌 Kernel");
+  suite.requests[0].reject(httpFailure(suite.requests[0], { code: "project_kernel_busy", reason: "请先停止忙碌 Kernel", secret: "not rendered" }));
+  await rejected;
+  assert.equal(suite.store.getState(), initial);
+  const retry = initial.upgradeProject("target", "same-scheme", "new-algo");
+  suite.requests[1].resolve({ ...suite.target, algoVersion: "new-algo" });
+  await retry;
+  assert.equal(suite.store.getState().projects[0].algoVersion, "new-algo");
+});
+
+test("same-target upgrade accepts an unchanged no-op response and a late upgrade never resurrects deletion", async () => {
+  const suite = harness();
+  const pending = suite.store.getState().upgradeProject("target", suite.target.schemeVersion, suite.target.algoVersion);
+  suite.requests[0].resolve(suite.target);
+  await pending;
+  assert.equal(suite.store.getState().projects[0].schemeVersion, suite.target.schemeVersion);
+  const late = suite.store.getState().upgradeProject("target", "next", "next");
+  const remove = suite.store.getState().removeProject("target");
+  suite.requests[2].resolve();
+  await remove;
+  suite.requests[1].resolve({ ...suite.target, schemeVersion: "next", algoVersion: "next" });
+  await late;
   assert.deepEqual(Array.from(suite.store.getState().projects), [suite.retained]);
 });
 

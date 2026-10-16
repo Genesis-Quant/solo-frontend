@@ -199,7 +199,7 @@ export default function ProjectDialog({
               onChange={(event) => setDescription(event.target.value)}
             />
           </div>
-          {project?.retired && <Alert><AlertDescription>{project.retiredReason || "项目已退役"}。仅可修改描述作为历史注释；不能重命名，不会重建环境、更改历史记录或恢复版本使用。</AlertDescription></Alert>}
+          {project?.retired && <Alert><AlertDescription>{project.retiredReason || "项目已退役"}。本弹窗仅可修改描述作为历史注释；不能重命名，不会重建环境、更改历史记录或恢复版本使用。若需更新环境，请使用项目列表中的“升级版本”；历史退役 run 不会恢复活跃。</AlertDescription></Alert>}
           {!project && (
             <div className="space-y-4">
               <div className="space-y-2">

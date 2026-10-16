@@ -24,12 +24,10 @@ export class BacktestAnalytics {
 
   private constructor(private readonly database: BrowserDuckDb, private readonly files: Record<BacktestTableName, string>, private readonly registered: Set<BacktestTableName>) {}
 
-  static async create(workflowInstanceId: number, dailyPortfolios: ArrayBuffer) {
+  static async create(workflowInstanceId: number) {
     const names: BacktestTableName[] = ["trade_details", "daily_positions", "daily_portfolios", "daily_trading_statistics"];
     const files = Object.fromEntries(names.map((name) => [name, `backtest-${workflowInstanceId}-${name}.parquet`])) as Record<BacktestTableName, string>;
-    const analytics = new BacktestAnalytics(await BrowserDuckDb.create({ [files.daily_portfolios]: dailyPortfolios }), files, new Set<BacktestTableName>(["daily_portfolios"]));
-    await analytics.readSchema("daily_portfolios");
-    return analytics;
+    return new BacktestAnalytics(await BrowserDuckDb.create({}), files, new Set<BacktestTableName>());
   }
 
   isRegistered(name: BacktestTableName) {
@@ -118,7 +116,7 @@ function identifier(value: string) { return `"${value.replace(/"/g, "\"\"")}"`; 
 function numberValue(value: unknown) { if (value === null || value === undefined) return null; const number = Number(value); return Number.isFinite(number) ? number : null; }
 
 function tableWhere(name: BacktestTableName, range: BacktestDateRange, filters: ParquetColumnFilterState[], columns: ReadonlySet<string>) {
-  const predicates = [`CAST(${identifier(backtestTableTimeColumns[name])} AS DATE) BETWEEN DATE ${literal(range.start)} AND DATE ${literal(range.end)}`];
+    const predicates = range.start && range.end ? [`CAST(${identifier(backtestTableTimeColumns[name])} AS DATE) BETWEEN DATE ${literal(range.start)} AND DATE ${literal(range.end)}`] : [];
   filters.forEach((filter) => {
     if (!columns.has(filter.id)) return;
     const config = backtestTableConfigs[name][filter.id];
@@ -127,7 +125,7 @@ function tableWhere(name: BacktestTableName, range: BacktestDateRange, filters: 
     else if (config.filter === "text") predicates.push(`contains(lower(CAST(${identifier(filter.id)} AS VARCHAR)), lower(${literal(String(filter.value))}))`);
     else if (config.filter === "enum" && config.enum?.[String(filter.value)]) predicates.push(`CAST(${identifier(filter.id)} AS VARCHAR) = ${literal(String(filter.value))}`);
   });
-  return `WHERE ${predicates.join(" AND ")}`;
+  return predicates.length ? `WHERE ${predicates.join(" AND ")}` : "";
 }
 
 function tableOrderBy(name: BacktestTableName, query: ParquetTableQuery, columns: ReadonlySet<string>) {

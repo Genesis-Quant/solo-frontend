@@ -1,16 +1,13 @@
 import type { FactorReportParameters } from "@/types/factor";
 import type { ReportData } from "./reports";
 import { schemeMajor } from "./scheme";
+import { returnMetadata } from "./factorReturns";
 
 export interface NotebookReportData extends ReportData {
   theme: "light" | "dark";
 }
 
 const loginMessage = "请先在同一浏览器中登录 Jupyter，再重新加载报告；若已登录，请检查同源 /jupyter 代理及文件访问权限。";
-const requiredFiles = {
-  factor: ["information_coefficient", "group_returns"],
-  backtest: ["daily_portfolios", "trade_details", "daily_positions", "daily_trading_statistics"]
-} as const;
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("报告清单格式无效");
@@ -34,12 +31,11 @@ function factorParameters(value: unknown): FactorReportParameters {
   const factorColumns = columns(parameters.factor_columns);
   const returnColumns = columns(parameters.return_columns);
   const specs = object(parameters.return_specs);
-  if (Object.keys(specs).length !== returnColumns.length) throw new Error("报告收益规格与收益列不一致");
   const returnSpecs = Object.fromEntries(returnColumns.map((column) => {
     if (!Object.hasOwn(specs, column)) throw new Error("报告缺少收益规格");
     const spec = object(specs[column]);
     if (spec.kind !== "simple" && spec.kind !== "log") throw new Error("报告收益类型无效");
-    return [column, { kind: spec.kind, periods: positiveInteger(spec.periods) }];
+    return [column, { kind: spec.kind, periods: positiveInteger(spec.periods), ...returnMetadata(column, spec) }];
   })) as FactorReportParameters["return_specs"];
   return {
     factor_columns: factorColumns,
@@ -59,7 +55,7 @@ export function notebookReportUrl(path: string): string {
   return `/jupyter/solo/files/${parts.map(encodeURIComponent).join("/")}`;
 }
 
-/** Notebook 清单独立于任务 run.json，Scheme 1.x 的必需文件与运行报告相同。 */
+/** Notebook 清单独立于任务 run.json，回测文件由所选页面按需读取。 */
 export function parseNotebookReport(manifest: unknown, path: string): NotebookReportData {
   const manifestUrl = notebookReportUrl(path);
   const data = object(manifest);
@@ -68,24 +64,26 @@ export function parseNotebookReport(manifest: unknown, path: string): NotebookRe
     throw new Error(`尚不支持 Scheme ${String(data.schemeVersion ?? "未记录")} 的报告`);
   }
   if (data.kind !== "factor" && data.kind !== "backtest") throw new Error("未知报告类型");
-  if (data.theme !== "light" && data.theme !== "dark") throw new Error("报告 theme 仅支持 light 或 dark");
-  const annualTradingDays = positiveInteger(data.annualTradingDays);
-  if (typeof data.riskFreeRate !== "number" || !Number.isFinite(data.riskFreeRate)) throw new Error("报告 riskFreeRate 必须为有限数值");
+  const theme = data.theme ?? "light";
+  if (theme !== "light" && theme !== "dark") throw new Error("报告 theme 仅支持 light 或 dark");
+  const annualTradingDays = data.kind === "backtest" ? positiveInteger(data.annualTradingDays ?? 252) : 252;
+  const riskFreeRate = data.kind === "backtest" ? data.riskFreeRate ?? 0 : 0;
+  if (data.kind === "backtest" && (typeof riskFreeRate !== "number" || !Number.isFinite(riskFreeRate))) throw new Error("报告 riskFreeRate 必须为有限数值");
   const base = manifestUrl.slice(0, manifestUrl.lastIndexOf("/"));
   const files = Object.fromEntries(Object.entries(object(data.files)).map(([name, file]) => {
-    if (typeof file !== "string" || !/^[\w-][\w.-]*\.parquet$/.test(file) || file.includes("..")) throw new Error("报告文件名无效");
+    if (typeof file !== "string" || !file || file === "." || file === ".." || /[\\/:\u0000-\u001f\u007f-\u009f]/.test(file)) throw new Error("报告文件名无效");
     return [name, `${base}/${encodeURIComponent(file)}`];
   }));
-  for (const name of requiredFiles[data.kind]) {
+  for (const name of data.kind === "factor" ? ["information_coefficient", "group_returns"] : []) {
     if (!Object.hasOwn(files, name)) throw new Error(`报告缺少 ${name}`);
   }
   const report: NotebookReportData = {
     schemeVersion: data.schemeVersion,
     kind: data.kind,
-    theme: data.theme,
+    theme,
     files,
     annualTradingDays,
-    riskFreeRate: data.riskFreeRate
+    riskFreeRate: riskFreeRate as number
   };
   if (data.kind === "factor") report.parameters = factorParameters(data.parameters);
   else if (Object.hasOwn(data, "parameters")) throw new Error("报告 parameters 仅适用于 factor");

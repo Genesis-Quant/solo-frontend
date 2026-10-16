@@ -1,4 +1,4 @@
-const versionPattern = /^(?:v)?(\d+)\.(\d+)\.\d+(?:(?:a|b|rc)\d+|[.+-][\w.-]+)?$/;
+const versionPattern = /^(\d+)(?:\.(\d+))?(?:\.\d+)?(?![\s\S])/;
 
 /** 报告仅按主版本分派，项目互调另按主、次版本校验。 */
 export function schemeMajor(version: string | null | undefined): number | null {
@@ -10,7 +10,7 @@ export function sameSchemeSeries(left: string | null | undefined, right: string 
   const first = versionPattern.exec(left ?? "");
   const second = versionPattern.exec(right ?? "");
   return first !== null && second !== null
-    && Number(first[1]) === Number(second[1]) && Number(first[2]) === Number(second[2]);
+    && Number(first[1]) === Number(second[1]) && Number(first[2] ?? 0) === Number(second[2] ?? 0);
 }
 
 export const supportedSchemeMajors = [1] as const;

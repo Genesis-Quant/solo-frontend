@@ -16,7 +16,7 @@ const compiled = new Map();
 
 function artifact(id = "model-release", kind = "model", overrides = {}) {
   return {
-    id, kind, package: `${kind}-1234`, version: "1.2.1", sha256: "a".repeat(64),
+    id, kind, package: `${kind}-1234`, version: "1.2.1",
     filename: `${kind}_1234-1.2.1-py3-none-any.whl`, sizeBytes: 2048, entry: "algo:entry", schemeVersion: "1.2.7",
     sources: { scheme: { version: "1.2.7", tag: "v1.2.7", commit: "accepted-commit" } }, dependencies: {},
     sourceProjectId: "deleted-source", sourceProjectName: "历史来源", sourceVersionId: "deleted-version", publishedAt: "2026-10-07T00:00:00Z",
@@ -222,6 +222,28 @@ test("catalog reload invalidates choices that disappear or retire", async () => 
   } finally { app.close(); }
 });
 
+test("a catalog refresh failure stays local and preserves selected strategy steps and submission", async () => {
+  const app = fixture();
+  try {
+    app.requests[0].resolve([artifact()]); await app.settle();
+    app.choose("model", "model-release"); await app.settle();
+    app.button("刷新成果").props.onClick(); await app.settle();
+    app.requests[1].reject("目录暂不可用", 503); await app.settle();
+    assert.match(text(app.tree), /目录暂不可用/);
+    const advance = app.submit();
+    assert.deepEqual(app.requests[2].body, { artifacts: { model: "model-release" } });
+    app.requests[2].resolve(Object.fromEntries(stages.map((kind) => [kind, { schema: {}, values: {} }])));
+    await advance; await app.settle();
+    for (let step = 1; step < 4; step++) { await app.submit(); await app.settle(); }
+    assert.equal(app.button("创建并回测").props.disabled, false);
+    const submit = app.submit();
+    assert.deepEqual(app.requests[3].body.selections, { artifacts: { model: "model-release" } });
+    app.requests[3].reject({ reason: "后端确认该成果已退役" });
+    await submit; await app.settle();
+    assert.match(text(app.tree), /后端确认该成果已退役/);
+  } finally { app.close(); }
+});
+
 test("a refreshed independent catalog ignores a late superseded GET", async () => {
   const app = fixture("ArtifactsPage");
   try {
@@ -300,7 +322,7 @@ test("artifact row actions preserve downloads, stop row events, and cancel confi
     app.openDelete(target); await app.settle();
     assert.equal(app.node("AlertDialog").props.open, true);
     assert.match(text(app.node("AlertDialogTitle")), /model-1234 1.2.1/);
-    for (const value of [target.package, target.version, target.filename, target.sha256, target.id]) assert.ok(text(app.tree).includes(value));
+    for (const value of [target.package, target.version, target.filename, target.id]) assert.ok(text(app.tree).includes(value));
     assert.ok(elements(app.tree, "dd").every((node) => node.props.className.includes("break-all")));
     assert.match(text(app.node("AlertDialogDescription")), /永久删除.*登记记录、wheel 及发布环境.*冻结任务的副本和历史报告保留.*不再可下载或用于新安装、策略组装.*项目、其他成果或在途安装引用/);
     app.node("AlertDialogCancel").props.onClick(); await app.settle();
@@ -430,11 +452,10 @@ test("a confirmation is an immutable UUID/metadata snapshot even when refresh re
     app.openDelete(original); await app.settle();
     original.filename = "mutated-metadata.whl";
     app.refresh(); await app.settle();
-    const replacement = artifact("replacement-uuid", "model", { sha256: "b".repeat(64), filename: "replacement.whl" });
+    const replacement = artifact("replacement-uuid", "model", { filename: "replacement.whl" });
     app.requests[1].resolve([replacement]); await app.settle();
     assert.deepEqual(Array.from(app.table.props.rows, (row) => row.id), [replacement.id]);
     assert.ok(text(app.tree).includes(target.filename));
-    assert.ok(text(app.tree).includes(target.sha256));
     assert.doesNotMatch(text(app.tree), /mutated-metadata.whl|replacement.whl|replacement-uuid/);
     const pending = app.confirmDelete();
     assert.equal(app.requests[2].config.url, "/artifacts/original-uuid");
@@ -460,7 +481,6 @@ test("partial artifact cleanup keeps the original snapshot and retries cleanup a
     app.requests[2].resolve([replacement]); await app.settle();
     assert.deepEqual(Array.from(app.table.props.rows, (row) => row.id), [replacement.id]);
     assert.ok(text(app.tree).includes(target.id));
-    assert.ok(text(app.tree).includes(target.sha256));
     const retry = app.confirmDelete(); await app.settle();
     assert.equal(app.requests[3].config.url, "/artifacts/cleanup-target");
     app.requests[3].reject("发布目录仍不可访问", 503); await retry; await app.settle();
@@ -566,7 +586,7 @@ test("ProjectDetail never fabricates artifact filenames/sizes and uses accepted 
     await real.settle();
     const link = elements(real.tree, "a").find((node) => node.props.download && text(node) === accepted.filename);
     assert.equal(link.props.href, "/api/v1/artifacts/independent-release/wheel");
-    assert.match(text(real.tree), /model-1234.*1.2.1.*2.0 KB.*SHA256/);
+    assert.match(text(real.tree), /model-1234.*1.2.1.*2.0 KB/);
   } finally { real.close(); }
 });
 

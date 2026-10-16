@@ -6,9 +6,7 @@ export interface ResearchArtifact {
   kind: ProjectKind;
   package: string;
   version: string;
-  sha256: string;
   filename: string;
-  size?: number | null;
   sizeBytes?: number | null;
   entry: string;
   schemeVersion: string | null;

@@ -1,5 +1,5 @@
 import { Loader2 } from "lucide-react";
-import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { max as statisticsMax, mean as statisticsMean, sum } from "simple-statistics";
 
 import { useReportApi } from "@/assets/lib/reports";
@@ -41,9 +41,10 @@ type BacktestReportProps = {
 export default function BacktestReport({ activeTab, annualTradingDays, chartRanges, onActiveTabChange, onChartRanges, riskFreeRate, showTabs = true, workflowInstanceId }: BacktestReportProps) {
   const backtestApi = useReportApi();
   const theme = useAppStore((state) => state.theme);
-  const analytics = useRef<BacktestAnalytics | null>(null);
   const [localTab, setLocalTab] = useState("overview");
-  const [portfolio, setPortfolio] = useState<PortfolioPoint[]>([]);
+  const [session, setSession] = useState<BacktestAnalytics | null>(null);
+  const [sessionError, setSessionError] = useState("");
+  const [portfolio, setPortfolio] = useState<PortfolioPoint[] | null>(null);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
   const [loading, setLoading] = useState(true);
@@ -60,35 +61,54 @@ export default function BacktestReport({ activeTab, annualTradingDays, chartRang
   const [tableLoadedKey, setTableLoadedKey] = useState("");
 
   const loadRawTable = useCallback(async (name: BacktestTableName) => {
-    const instance = analytics.current;
-    if (!instance) throw new Error("回测结果尚未加载");
-    return instance.rawTable(name);
-  }, []);
+    if (!session) throw new Error("回测结果尚未加载");
+    return session.rawTable(name);
+  }, [session]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError("");
-    backtestApi.output(workflowInstanceId, "daily_portfolios")
-      .then(async (dailyPortfolios) => {
-        const instance = await BacktestAnalytics.create(workflowInstanceId, dailyPortfolios);
+    setSession(null);
+    setSessionError("");
+    setPortfolio(null);
+    setStartDate("");
+    setEndDate("");
+    let instance: BacktestAnalytics | null = null;
+    BacktestAnalytics.create(workflowInstanceId)
+      .then(async (created) => {
+        instance = created;
         if (cancelled) { await instance.close(); return; }
-        analytics.current = instance;
-        const nextPortfolio = await instance.portfolios();
-        if (cancelled) return;
-        setPortfolio(nextPortfolio);
-        setStartDate(nextPortfolio[0]?.time ?? "");
-        setEndDate(nextPortfolio.at(-1)?.time ?? "");
+        setSession(instance);
       })
-      .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; const instance = analytics.current; analytics.current = null; instance?.close(); };
+      .catch((reason) => { if (!cancelled) { setSessionError(reason instanceof Error ? reason.message : String(reason)); setLoading(false); } });
+    return () => { cancelled = true; instance?.close(); };
   }, [backtestApi, workflowInstanceId]);
 
   useEffect(() => {
-    const activeInstance = analytics.current;
-    if (!tableName || !activeInstance || loading || error || !startDate || !endDate) return undefined;
-    const instance = activeInstance;
+    if (!session || tableName || portfolio !== null) return;
+    const instance = session;
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    async function loadOverview() {
+      if (!instance.isRegistered("daily_portfolios")) await instance.register("daily_portfolios", await backtestApi.output(workflowInstanceId, "daily_portfolios"));
+      const nextPortfolio = await instance.portfolios();
+      if (cancelled) return;
+      setPortfolio(nextPortfolio);
+      setStartDate(nextPortfolio[0]?.time ?? "");
+      setEndDate(nextPortfolio.at(-1)?.time ?? "");
+      setLoading(false);
+    }
+    loadOverview().catch((reason) => {
+      if (!cancelled) { setError(reason instanceof Error ? reason.message : String(reason)); setLoading(false); }
+    });
+    return () => { cancelled = true; };
+  }, [backtestApi, portfolio, session, tableName, workflowInstanceId]);
+
+  useEffect(() => {
+    if (!tableName || !session) return undefined;
+    const instance = session;
     const name = tableName;
     const requestKey = tableRequestKey;
     let cancelled = false;
@@ -101,11 +121,11 @@ export default function BacktestReport({ activeTab, annualTradingDays, chartRang
     }
     loadTable().catch((reason) => { if (!cancelled) { setTableError(reason instanceof Error ? reason.message : String(reason)); setTableLoadedKey(requestKey); } }).finally(() => { if (!cancelled) setTableLoading(false); });
     return () => { cancelled = true; };
-  }, [backtestApi, endDate, error, loading, startDate, tableName, tablePage, tablePageSize, tableQuery, tableRequestKey, workflowInstanceId]);
+  }, [backtestApi, endDate, session, startDate, tableName, tablePage, tablePageSize, tableQuery, tableRequestKey, workflowInstanceId]);
 
-  const selectedPortfolio = useMemo(() => portfolio.filter((row) => (!startDate || row.time >= startDate) && (!endDate || row.time <= endDate)), [endDate, portfolio, startDate]);
-  const rangePoints = useMemo(() => portfolio.map((row) => ({ time: row.time, value: row.dailyReturn })), [portfolio]);
-  const report = useMemo(() => createReport(selectedPortfolio, annualTradingDays, riskFreeRate, selectedPortfolio[0]?.time === portfolio[0]?.time), [annualTradingDays, portfolio, riskFreeRate, selectedPortfolio]);
+  const selectedPortfolio = useMemo(() => (portfolio ?? []).filter((row) => (!startDate || row.time >= startDate) && (!endDate || row.time <= endDate)), [endDate, portfolio, startDate]);
+  const rangePoints = useMemo(() => (portfolio ?? []).map((row) => ({ time: row.time, value: row.dailyReturn })), [portfolio]);
+  const report = useMemo(() => createReport(selectedPortfolio, annualTradingDays, riskFreeRate, selectedPortfolio[0]?.time === portfolio?.[0]?.time), [annualTradingDays, portfolio, riskFreeRate, selectedPortfolio]);
 
   useEffect(() => {
     if (!onChartRanges || !report) return;
@@ -120,13 +140,13 @@ export default function BacktestReport({ activeTab, annualTradingDays, chartRang
     });
   }, [onChartRanges, report, selectedPortfolio]);
 
-  const overview = renderOverview({ chartRanges, error, loading, portfolio: selectedPortfolio, report, theme });
+  const overview = renderOverview({ chartRanges, error: sessionError || error, loading: !sessionError && loading, portfolio: selectedPortfolio, report, theme });
 
-  const tableContent = tableName ? renderParquetContent({ data: tableData, download: { fileName: `backtest-${workflowInstanceId}-${tableName}.xlsx`, loadRows: () => loadRawTable(tableName) }, error: tableLoadedKey === tableRequestKey ? tableError : "", loading: tableLoading || tableLoadedKey !== tableRequestKey, name: tableName, page: tablePage, pageSize: tablePageSize, query: tableQuery, onPage: setTablePage, onPageSize: (nextPageSize) => { setTablePage(1); setTablePageSize(nextPageSize); }, onQuery: (nextQuery) => { setTablePage(1); setTableQuery(nextQuery); } }) : null;
+  const tableContent = tableName ? renderParquetContent({ data: tableData, download: { fileName: `backtest-${workflowInstanceId}-${tableName}.xlsx`, loadRows: () => loadRawTable(tableName) }, error: sessionError || (tableLoadedKey === tableRequestKey ? tableError : ""), loading: !sessionError && (tableLoading || tableLoadedKey !== tableRequestKey), name: tableName, page: tablePage, pageSize: tablePageSize, query: tableQuery, onPage: setTablePage, onPageSize: (nextPageSize) => { setTablePage(1); setTablePageSize(nextPageSize); }, onQuery: (nextQuery) => { setTablePage(1); setTableQuery(nextQuery); } }) : null;
 
   return <Tabs value={selectedTab} onValueChange={(value) => { setTablePage(1); setTableQuery(emptyParquetTableQuery()); setLocalTab(value); onActiveTabChange?.(value); }} className="relative">
-    {showTabs ? <div className="sticky top-0 z-30 mb-2 max-w-full bg-background pb-1"><TabsList scrollable><TabsTrigger value="overview">回测概览</TabsTrigger>{tableTabs.map((tab) => <TabsTrigger disabled={loading || Boolean(error)} key={tab.value} value={tab.value}>{tab.label}</TabsTrigger>)}</TabsList></div> : null}
-    {!loading && !error && portfolio.length ? <DateRangeBar endDate={endDate} maximumDate={portfolio.at(-1)?.time ?? ""} minimumDate={portfolio[0]?.time ?? ""} points={rangePoints} startDate={startDate} theme={theme} onRangeChange={(nextStartDate, nextEndDate) => { setTablePage(1); setStartDate(nextStartDate); setEndDate(nextEndDate); }} onReset={() => { setTablePage(1); setStartDate(portfolio[0]?.time ?? ""); setEndDate(portfolio.at(-1)?.time ?? ""); }} /> : null}
+    {showTabs ? <div className="sticky top-0 z-30 mb-2 max-w-full bg-background pb-1"><TabsList scrollable><TabsTrigger value="overview">回测概览</TabsTrigger>{tableTabs.map((tab) => <TabsTrigger key={tab.value} value={tab.value}>{tab.label}</TabsTrigger>)}</TabsList></div> : null}
+    {!loading && !error && portfolio?.length ? <DateRangeBar endDate={endDate} maximumDate={portfolio.at(-1)?.time ?? ""} minimumDate={portfolio[0]?.time ?? ""} points={rangePoints} startDate={startDate} theme={theme} onRangeChange={(nextStartDate, nextEndDate) => { setTablePage(1); setStartDate(nextStartDate); setEndDate(nextEndDate); }} onReset={() => { setTablePage(1); setStartDate(portfolio[0]?.time ?? ""); setEndDate(portfolio.at(-1)?.time ?? ""); }} /> : null}
     <TabsContent value="overview" className="space-y-4">{overview}</TabsContent>
     {tableTabs.map((tab) => <TabsContent className="min-h-[calc(100dvh-20rem)]" key={tab.value} value={tab.value}>{selectedTab === tab.value ? tableContent : null}</TabsContent>)}
   </Tabs>;

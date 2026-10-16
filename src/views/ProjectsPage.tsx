@@ -1,9 +1,10 @@
 import { useCallback, useMemo, useState } from "react";
-import { FolderOpen, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
+import { ArrowUpCircle, FolderOpen, MoreHorizontal, Pencil, Plus, Trash2 } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { RequestError } from "@/assets/lib/requestError";
 import ProjectDialog from "@/components/modal/ProjectDialog";
+import ProjectUpgradeDialog from "@/components/modal/ProjectUpgradeDialog";
 import ProjectDataTable, { type ProjectTableColumn } from "@/components/table/ProjectDataTable";
 import { useProjectTable } from "@/hooks/useProjectTable";
 import { PageHeader, pageContainer } from "@/components/bar/PageHeader";
@@ -29,6 +30,8 @@ export default function ProjectsPage({ kind }: { kind: ProjectKind }) {
   const [search, setSearch] = usePageState(scope, "search", "");
   const [status, setStatus] = usePageState(scope, "status", "all");
   const [form, setForm] = useState<ResearchProject | "new" | null>(null);
+  const [upgrading, setUpgrading] = useState<ResearchProject | null>(null);
+  const upgradeProject = projects.find((project) => project.id === upgrading?.id) ?? upgrading;
   const [deleting, setDeleting] = useState<ResearchProject | null>(null);
   const [deleteFiles, setDeleteFiles] = useState(true);
   const [deleteError, setDeleteError] = useState("");
@@ -63,6 +66,7 @@ export default function ProjectsPage({ kind }: { kind: ProjectKind }) {
           <DropdownMenuContent align="end">
             <DropdownMenuItem asChild><Link to={`/projects/${p.id}`}><FolderOpen />打开项目</Link></DropdownMenuItem>
             <DropdownMenuItem onSelect={() => setForm(p)}><Pencil />编辑项目</DropdownMenuItem>
+            <DropdownMenuItem onSelect={() => setUpgrading(p)}><ArrowUpCircle />升级版本</DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" onSelect={() => openDelete(p)}><Trash2 />删除项目</DropdownMenuItem>
           </DropdownMenuContent>
@@ -88,6 +92,7 @@ export default function ProjectsPage({ kind }: { kind: ProjectKind }) {
           onClose={() => setForm(null)}
         />
       )}
+      {upgradeProject && <ProjectUpgradeDialog key={upgradeProject.id} project={upgradeProject} onClose={() => setUpgrading(null)} />}
       <AlertDialog
         open={!!deleting}
         onOpenChange={(open) => {

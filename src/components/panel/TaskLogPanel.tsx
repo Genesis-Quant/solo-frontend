@@ -45,9 +45,8 @@ export default function TaskLogPanel({ apiBase, className, reserveCloseButton = 
   const logRef = useRef<HTMLDivElement>(null);
   const followLatestRef = useRef(true);
   const resetScrollRef = useRef(false);
-  const selectionRef = useRef(`${apiBase}:${workflowInstanceId}:${taskInstanceId}:${scope}`);
-  const refreshInFlightRef = useRef<string | null>(null);
-  selectionRef.current = `${apiBase}:${workflowInstanceId}:${taskInstanceId}:${scope}`;
+  const generationRef = useRef(0);
+  const refreshInFlightRef = useRef(false);
   const task = selectedWorkflowTask(workflow, taskInstanceId);
   const resolvedTaskInstanceId = task?.task_instance_id ?? taskInstanceId;
   const taskUnavailable = taskLogUnavailable(workflow, task?.host, resolvedTaskInstanceId);
@@ -85,23 +84,21 @@ export default function TaskLogPanel({ apiBase, className, reserveCloseButton = 
     followLatestRef.current = safePage === totalPages && isLogAtBottom(viewport);
   }, [safePage, totalPages]);
 
-  const loadWorkflow = useCallback(async () => {
-    const selection = `${apiBase}:${workflowInstanceId}:${taskInstanceId}:${scope}`;
+  const loadWorkflow = useCallback(async (generation: number) => {
     const result = await api.tasks();
-    if (selectionRef.current !== selection) return null;
+    if (generationRef.current !== generation) return null;
     setWorkflow(result);
     return result;
-  }, [api, apiBase, scope, taskInstanceId, workflowInstanceId]);
+  }, [api]);
 
-  const loadLogs = useCallback(async (currentWorkflow: WorkflowTasks, reset: boolean) => {
+  const loadLogs = useCallback(async (currentWorkflow: WorkflowTasks, reset: boolean, generation: number) => {
     const currentTask = selectedWorkflowTask(currentWorkflow, taskInstanceId);
     const currentTaskInstanceId = currentTask?.task_instance_id;
     if (!currentTaskInstanceId || !currentTask.host) return false;
-    const selection = `${apiBase}:${workflowInstanceId}:${taskInstanceId}:${scope}`;
     const terminal = terminalStates.has(currentWorkflow.state) || terminalStates.has(currentTask.state);
     if (reset && terminal && scope === "full") {
       const completeLog = await api.downloadLog(currentTaskInstanceId);
-      if (selectionRef.current !== selection) return false;
+      if (generationRef.current !== generation) return false;
       setMessage(completeLog);
       nextLineRef.current = 0;
       nextCursorRef.current = null;
@@ -109,64 +106,70 @@ export default function TaskLogPanel({ apiBase, className, reserveCloseButton = 
     }
     let cursor = reset ? 0 : nextLineRef.current;
     let sourceCursor = reset ? null : nextCursorRef.current;
-    let added = "";
     let hasMore = true;
     while (hasMore) {
       const result = await api.logs(currentTaskInstanceId, cursor, FETCH_SIZE, scope, sourceCursor);
-      if (selectionRef.current !== selection) return false;
-      added = appendTaskLog(added, result.message, scope === "worker");
+      if (generationRef.current !== generation) return false;
+      const replace = reset && cursor === 0;
+      setMessage((current) => replace ? result.message : appendTaskLog(current, result.message, scope === "worker"));
       hasMore = result.has_more && result.next_line_num > cursor;
       cursor = result.next_line_num;
       sourceCursor = result.next_cursor ?? null;
+      nextLineRef.current = cursor;
+      nextCursorRef.current = sourceCursor;
     }
-    setMessage((current) => reset ? added : appendTaskLog(current, added, scope === "worker"));
-    nextLineRef.current = cursor;
-    nextCursorRef.current = sourceCursor;
     return true;
-  }, [api, apiBase, scope, taskInstanceId, workflowInstanceId]);
+  }, [api, scope, taskInstanceId]);
 
   const refresh = useCallback(async () => {
-    const selection = `${apiBase}:${workflowInstanceId}:${taskInstanceId}:${scope}`;
-    if (refreshInFlightRef.current === selection) return;
-    refreshInFlightRef.current = selection;
+    if (refreshInFlightRef.current) return;
+    const generation = ++generationRef.current;
+    refreshInFlightRef.current = true;
     setError("");
     setLoading(true);
     try {
-      const currentWorkflow = await loadWorkflow();
-      if (currentWorkflow && !await loadLogs(currentWorkflow, true)) resetLog();
+      const currentWorkflow = await loadWorkflow(generation);
+      if (currentWorkflow && !await loadLogs(currentWorkflow, true, generation) && generationRef.current === generation) resetLog();
     } catch (reason) {
-      if (selectionRef.current === selection) setError(reason instanceof Error ? reason.message : String(reason));
+      if (generationRef.current === generation) setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      if (selectionRef.current === selection) setLoading(false);
-      if (refreshInFlightRef.current === selection) refreshInFlightRef.current = null;
+      if (generationRef.current === generation) {
+        setLoading(false);
+        refreshInFlightRef.current = false;
+      }
     }
-  }, [apiBase, loadLogs, loadWorkflow, resetLog, scope, taskInstanceId, workflowInstanceId]);
+  }, [loadLogs, loadWorkflow, resetLog]);
 
+  useLayoutEffect(() => () => {
+    generationRef.current++;
+    refreshInFlightRef.current = false;
+  }, [apiBase, scope, taskInstanceId, workflowInstanceId]);
   useEffect(() => { setWorkflow(null); }, [apiBase, taskInstanceId, workflowInstanceId]);
   useEffect(() => {
     resetLog();
     refresh();
   }, [refresh, resetLog, taskInstanceId, workflowInstanceId]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const timer = window.setInterval(async () => {
-      const selection = `${apiBase}:${workflowInstanceId}:${taskInstanceId}:${scope}`;
-      if (refreshInFlightRef.current === selection) return;
-      refreshInFlightRef.current = selection;
+      if (refreshInFlightRef.current) return;
+      const generation = ++generationRef.current;
+      refreshInFlightRef.current = true;
       try {
-        const result = await loadWorkflow();
+        const result = await loadWorkflow(generation);
         const state = result ? selectedWorkflowTask(result, taskInstanceId)?.state : undefined;
         const terminal = Boolean(result && (terminalStates.has(result.state) || state && terminalStates.has(state)));
-        const logsLoaded = result ? await loadLogs(result, shouldResetTerminalTaskLog(scope, terminal)) : false;
-        if (selectionRef.current === selection) setError("");
+        const logsLoaded = result ? await loadLogs(result, shouldResetTerminalTaskLog(scope, terminal), generation) : false;
+        if (generationRef.current !== generation) return;
+        setError("");
         if (terminal && (logsLoaded || !selectedWorkflowTask(result!, taskInstanceId)?.host)) window.clearInterval(timer);
       } catch (reason) {
-        if (selectionRef.current === selection) setError(reason instanceof Error ? reason.message : String(reason));
+        if (generationRef.current === generation) setError(reason instanceof Error ? reason.message : String(reason));
       } finally {
-        if (refreshInFlightRef.current === selection) refreshInFlightRef.current = null;
+        if (generationRef.current === generation) refreshInFlightRef.current = false;
       }
     }, 2500);
     return () => window.clearInterval(timer);
-  }, [apiBase, loadLogs, loadWorkflow, scope, taskInstanceId, workflowInstanceId]);
+  }, [loadLogs, loadWorkflow, scope, taskInstanceId, workflowInstanceId]);
   useEffect(() => { if (followLatestRef.current && safePage !== totalPages) setPage(totalPages); }, [safePage, totalPages]);
   useEffect(() => { if (page > totalPages) setPage(totalPages); }, [page, totalPages]);
   useLayoutEffect(() => {

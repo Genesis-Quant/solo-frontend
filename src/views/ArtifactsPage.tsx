@@ -44,10 +44,10 @@ export default function ArtifactsPage() {
   }, []);
   const releases = artifacts.filter((artifact) => !!artifact.publishedAt);
   const filtered = releases.filter((artifact) => (kind === "all" || artifact.kind === kind)
-    && `${artifact.package} ${artifact.version} ${artifact.filename} ${artifact.sourceProjectName ?? ""} ${artifact.id} ${artifact.sha256}`.toLowerCase().includes(search.toLowerCase()));
+    && `${artifact.package} ${artifact.version} ${artifact.filename} ${artifact.sourceProjectName ?? ""} ${artifact.id}`.toLowerCase().includes(search.toLowerCase()));
   const columns = useMemo<ProjectTableColumn<ResearchArtifact, ArtifactSort>[]>(() => [
     { id: "package", label: "已发布包", size: 300, sortKey: "package", value: (artifact) => artifact.package,
-      cell: (artifact, href) => <><a href={href} download className="block truncate rounded-sm font-medium hover:underline focus-visible:underline" title={artifact.filename}>{artifact.package}</a><p className="mt-1 truncate font-mono text-xs text-muted-foreground" title={`SHA256 ${artifact.sha256}`}>{artifact.filename} · {artifactSize(artifact.size ?? artifact.sizeBytes)}</p>{artifact.retired && <Badge variant="outline" className="mt-1" title={artifact.retiredReason ?? undefined}>已退役</Badge>}</> },
+      cell: (artifact, href) => <><a href={href} download className="block truncate rounded-sm font-medium hover:underline focus-visible:underline" title={artifact.filename}>{artifact.package}</a><p className="mt-1 truncate font-mono text-xs text-muted-foreground">{artifact.filename} · {artifactSize(artifact.sizeBytes)}</p>{artifact.retired && <Badge variant="outline" className="mt-1" title={artifact.retiredReason ?? undefined}>已退役</Badge>}</> },
     { id: "kind", label: "类型", size: 120, sortKey: "kind", value: (artifact) => kindLabels[artifact.kind] },
     { id: "version", label: "包版本", size: 110, sortKey: "version", value: (artifact) => artifact.version, className: "font-mono text-xs" },
     { id: "schemeVersion", label: "Scheme", size: 110, sortKey: "schemeVersion", value: (artifact) => artifact.schemeVersion ?? "未记录", className: "font-mono text-xs" },
@@ -68,7 +68,7 @@ export default function ArtifactsPage() {
     <p className="text-sm text-muted-foreground">已发布包及其冻结依赖独立保留，删除源项目不会移除成果。来源仅为历史快照；已退役成果可下载，但不能用于新策略。</p>
     {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>}
     <ProjectDataTable {...table} columns={columns} loading={!loaded && !error} emptyMessage="暂无符合条件的已发布成果" rowHref={wheelHref} onOpen={(artifact) => window.location.assign(wheelHref(artifact))}
-      search={{ value: search, onChange: changeSearch, placeholder: "搜索包、来源或 SHA256", label: "搜索已发布成果" }}
+      search={{ value: search, onChange: changeSearch, placeholder: "搜索包、来源或文件名", label: "搜索已发布成果" }}
       filters={<Select value={kind} onValueChange={(value) => { setKind(value); resetPage(); }}><SelectTrigger className="w-36" aria-label="成果类型筛选"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">全部类型</SelectItem>{projectKinds.map((item) => <SelectItem key={item} value={item}>{kindLabels[item]}</SelectItem>)}</SelectContent></Select>} />
     <AlertDialog open={!!deleting} onOpenChange={(open) => { if (!open) closeDelete(); }}>
       <AlertDialogContent onEscapeKeyDown={(event) => { if (deletePending.current) event.preventDefault(); }}>
@@ -81,7 +81,6 @@ export default function ArtifactsPage() {
         <dl className="min-w-0 space-y-2 rounded-md border bg-muted/30 p-3 text-sm">
           <div><dt className="text-muted-foreground">包及版本</dt><dd className="break-all font-mono text-xs">{deleting?.package} {deleting?.version}</dd></div>
           <div><dt className="text-muted-foreground">文件</dt><dd className="break-all font-mono text-xs">{deleting?.filename}</dd></div>
-          <div><dt className="text-muted-foreground">SHA256</dt><dd className="break-all font-mono text-xs">{deleting?.sha256}</dd></div>
           <div><dt className="text-muted-foreground">成果 ID</dt><dd className="break-all font-mono text-xs">{deleting?.id}</dd></div>
         </dl>
         {deleteError && <Alert variant="destructive"><AlertDescription className="break-all">{deleteError}{cleanupPending && <p>成果登记记录已删除，部分发布文件尚未清理。请重试清理原成果；不会删除后来发布的同名成果。</p>}</AlertDescription></Alert>}

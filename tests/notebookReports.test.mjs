@@ -31,12 +31,13 @@ function load(relative, overrides = {}, globals = {}) {
   return module.exports;
 }
 const scheme = load("../src/assets/lib/scheme.ts");
+const factorReturns = load("../src/assets/lib/factorReturns.ts");
 function notebook(globals = {}) {
-  return load("../src/assets/lib/notebookReports.ts", { "./scheme": scheme }, globals);
+  return load("../src/assets/lib/notebookReports.ts", { "./scheme": scheme, "./factorReturns": factorReturns }, globals);
 }
 function reportModule(files, globals = {}) {
   return load("../src/assets/lib/reports.ts", {
-    "./scheme": scheme, "./settings": { apiUrl: "/api/v1" }, "./notebookReports": files
+    "./scheme": scheme, "./factorReturns": factorReturns, "./settings": { apiUrl: "/api/v1" }, "./notebookReports": files
   }, globals);
 }
 function manifest(kind = "factor", overrides = {}) {
@@ -52,6 +53,13 @@ function manifest(kind = "factor", overrides = {}) {
   };
 }
 const parser = notebook();
+function factorRun(analysis) {
+  return {
+    protocol: 1, status: "success", versions: { scheme: "1.2.3" }, report_kind: "factor",
+    input: { kind: "factor", analysis: { columns: ["momentum"], groups: 5, n_select: 10, ...analysis } },
+    reports: { ...manifest().files, group_turnover: "group_turnover.parquet" }
+  };
+}
 
 for (const kind of ["factor", "backtest"]) {
   test(`Notebook ${kind} manifest uses its own Scheme version, metadata and encoded sibling files`, () => {
@@ -60,8 +68,8 @@ for (const kind of ["factor", "backtest"]) {
     assert.equal(report.kind, kind);
     assert.equal(report.schemeVersion, "1.2.3");
     assert.equal(report.theme, "dark");
-    assert.equal(report.annualTradingDays, 240);
-    assert.equal(report.riskFreeRate, 0.03);
+    assert.equal(report.annualTradingDays, kind === "backtest" ? 240 : 252);
+    assert.equal(report.riskFreeRate, kind === "backtest" ? 0.03 : 0);
     for (const name of kind === "factor" ? factorFiles : backtestFiles) assert.equal(report.files[name], `${base}/${name}.parquet`);
     if (kind === "factor") assert.deepEqual(JSON.parse(JSON.stringify(report.parameters)), input.parameters);
     else assert.equal(report.parameters, undefined);
@@ -69,10 +77,10 @@ for (const kind of ["factor", "backtest"]) {
 }
 
 test("Notebook dispatch supports all Scheme 1 minors but rejects missing, invalid and unknown majors", () => {
-  for (const version of ["1.0.1", "v1.1.7", "1.2.3", "1.99.9"]) {
+  for (const version of ["1", "1.2", "1.0.1", "1.1.7", "1.2.3", "1.99.9"]) {
     assert.equal(parser.parseNotebookReport(manifest("factor", { schemeVersion: version }), path).schemeVersion, version);
   }
-  for (const version of [undefined, null, 1, "bad", "1.2", "2.1.0"]) {
+  for (const version of [undefined, null, 1, "bad", "v1.2.3", "1.2.3rc1", "1.2.3.4", "2.1.0"]) {
     assert.throws(() => parser.parseNotebookReport(manifest("factor", { schemeVersion: version }), path), /尚不支持 Scheme/);
   }
 });
@@ -85,40 +93,65 @@ test("Notebook paths are root-relative, validated before fetch and encoded per s
   }
 });
 
-test("only safe, non-hidden sibling Parquet filenames are accepted, including optional files", () => {
-  for (const file of ["factor.parquet", "group-returns_1.parquet", "result.v1.parquet"]) {
-    assert.equal(parser.parseNotebookReport(manifest("factor", { files: { ...manifest().files, turnover: file } }), path).files.turnover, `${base}/${file}`);
-  }
-  for (const file of [".hidden.parquet", "..parquet", "a..b.parquet", "../x.parquet", "sub/x.parquet", "sub\\x.parquet", "C:x.parquet", "https://evil.test/x.parquet", "//evil.test/x.parquet", "a%2f.parquet", "a.parquet?token=x", "a.parquet#x", "a\0.parquet", "a.PARQUET", "a.json", "", null, 5]) {
-    assert.throws(() => parser.parseNotebookReport(manifest("factor", { files: { ...manifest().files, turnover: file } }), path), /文件名无效/);
-  }
-});
-
-test("Notebook and existing readV1 require exactly the same named files", () => {
+test("report filenames only reject traversal, separators and controls, and encode Chinese and spaces", () => {
   const existing = reportModule(parser);
-  for (const kind of ["factor", "backtest"]) {
-    const names = kind === "factor" ? factorFiles : backtestFiles;
-    for (const missing of names) {
-      const files = { ...manifest(kind).files };
-      delete files[missing];
-      assert.throws(() => parser.parseNotebookReport(manifest(kind, { files }), path), new RegExp(`缺少 ${missing}`));
-      const input = kind === "factor" ? { kind, analysis: { columns: ["x"], return_periods: [1], groups: 5, n_select: 10 } } : { kind: "strategy" };
-      assert.throws(() => existing.parseReport({ protocol: 1, status: "success", versions: { scheme: "1.2.3" }, report_kind: kind, input, reports: files }, "/reports/run", input.kind), new RegExp(`缺少 ${missing}`));
-    }
+  for (const file of ["因子 收益.parquet", ".hidden.parquet", "..parquet", "a..b.parquet", "result.v1.parquet", "a%2f.parquet", "a.parquet?token=x", "a.parquet#x", "a.PARQUET", "a.data"]) {
+    assert.equal(parser.parseNotebookReport(manifest("factor", { files: { ...manifest().files, turnover: file } }), path).files.turnover, `${base}/${encodeURIComponent(file)}`);
+    const run = factorRun({ max_lag: 1 });
+    run.reports.group_turnover = file;
+    assert.equal(existing.parseReport(run, "/reports/run", "factor").files.group_turnover, `/reports/run/${encodeURIComponent(file)}`);
+  }
+  for (const file of [".", "..", "../x.parquet", "sub/x.parquet", "sub\\x.parquet", "C:x.parquet", "https://evil.test/x.parquet", "//evil.test/x.parquet", "a\0.parquet", "a\n.parquet", "a\u007f.parquet", "a\u0085.parquet", "", null, 5]) {
+    assert.throws(() => parser.parseNotebookReport(manifest("factor", { files: { ...manifest().files, turnover: file } }), path), /文件名无效/);
+    const run = factorRun({ max_lag: 1 });
+    run.reports.group_turnover = file;
+    assert.throws(() => existing.parseReport(run, "/reports/run", "factor"), /文件名无效/);
   }
 });
 
-test("required Notebook protocol and metadata never silently default", () => {
-  for (const field of ["protocol", "format", "kind", "theme", "annualTradingDays", "riskFreeRate", "files", "parameters"]) {
+test("factor manifests require their main files while backtest files are checked only when requested", async () => {
+  const existing = reportModule(parser);
+  for (const missing of factorFiles) {
+    const files = { ...manifest().files };
+    delete files[missing];
+    assert.throws(() => parser.parseNotebookReport(manifest("factor", { files }), path), new RegExp(`缺少 ${missing}`));
+    const run = factorRun({ max_lag: 1 });
+    run.reports = files;
+    assert.throws(() => existing.parseReport(run, "/reports/run", "factor"), new RegExp(`缺少 ${missing}`));
+  }
+  for (const files of [{}, { trade_details: "交易 明细.parquet" }, { daily_positions: "持仓.parquet" }]) {
+    const report = parser.parseNotebookReport(manifest("backtest", { files }), path);
+    assert.deepEqual(Object.keys(report.files), Object.keys(files));
+    const run = { protocol: 1, status: "success", versions: { scheme: "1" }, report_kind: "backtest", input: { kind: "strategy" }, reports: files };
+    assert.deepEqual(Object.keys(existing.parseReport(run, "/reports/run", "strategy").files), Object.keys(files));
+    await assert.rejects(existing.reportApi(report).output(0, "daily_portfolios"), /缺少 daily_portfolios/);
+  }
+});
+
+test("Notebook display defaults and backtest-only annual parameters are validated where used", () => {
+  for (const field of ["protocol", "format", "kind", "files", "parameters"]) {
     const input = manifest();
     delete input[field];
     assert.throws(() => parser.parseNotebookReport(input, path), /报告/);
   }
+  for (const kind of ["factor", "backtest"]) {
+    const input = manifest(kind);
+    for (const field of ["theme", "annualTradingDays", "riskFreeRate"]) delete input[field];
+    const report = parser.parseNotebookReport(input, path);
+    assert.equal(report.theme, "light");
+    assert.equal(report.annualTradingDays, 252);
+    assert.equal(report.riskFreeRate, 0);
+  }
+  for (const changes of [{ protocol: 2 }, { format: "run" }, { kind: "strategy" }, { theme: "auto" }, { files: [] }]) {
+    assert.throws(() => parser.parseNotebookReport(manifest("factor", changes), path), /报告/);
+  }
   for (const changes of [
-    { protocol: 2 }, { format: "run" }, { kind: "strategy" }, { theme: "auto" }, { files: [] },
     ...[0, -1, 1.5, Infinity, NaN, "252"].map((annualTradingDays) => ({ annualTradingDays })),
-    ...[Infinity, -Infinity, NaN, "0", null].map((riskFreeRate) => ({ riskFreeRate }))
-  ]) assert.throws(() => parser.parseNotebookReport(manifest("factor", changes), path), /报告/);
+    ...[Infinity, -Infinity, NaN, "0"].map((riskFreeRate) => ({ riskFreeRate }))
+  ]) {
+    assert.throws(() => parser.parseNotebookReport(manifest("backtest", changes), path), /报告/);
+    assert.doesNotThrow(() => parser.parseNotebookReport(manifest("factor", changes), path));
+  }
   assert.throws(() => parser.parseNotebookReport(manifest("backtest", { parameters: {} }), path), /仅适用于 factor/);
 });
 
@@ -127,7 +160,7 @@ test("factor parameters validate columns, corresponding return specs and positiv
   for (const parameters of [
     null, [], {},
     ...[[], [""], [" "], ["x", "x"], [1], ["x\0"]].flatMap((value) => [{ ...good, factor_columns: value }, { ...good, return_columns: value }]),
-    { ...good, return_specs: {} }, { ...good, return_specs: { ...good.return_specs, extra: { kind: "simple", periods: 1 } } },
+    { ...good, return_specs: {} },
     { ...good, return_specs: { return_1: { kind: "simple", periods: 1 }, other: { kind: "simple", periods: 5 } } },
     { ...good, return_specs: { ...good.return_specs, return_1: { kind: "unknown", periods: 1 } } },
     ...[0, -1, 1.5, NaN, Infinity, "1"].flatMap((value) => [
@@ -135,6 +168,98 @@ test("factor parameters validate columns, corresponding return specs and positiv
       { ...good, return_specs: { ...good.return_specs, return_1: { kind: "simple", periods: value } } }
     ])
   ]) assert.throws(() => parser.parseNotebookReport(manifest("factor", { parameters }), path), /报告/);
+});
+
+for (const [maxLag, expectedColumns] of [
+  [1, ["r0o", "r1"]],
+  [2, ["r0o", "r1", "r1o", "r2"]],
+  [3, ["r0o", "r1", "r1o", "r2", "r2o", "r3"]]
+]) {
+  test(`factor max_lag=${maxLag} generates ordered single-segment specs and round-trips Notebook metadata`, () => {
+    const existing = reportModule(parser);
+    const report = existing.parseReport(factorRun({ max_lag: maxLag }), "/reports/factor", "factor");
+    const parameters = JSON.parse(JSON.stringify(report.parameters));
+    assert.deepEqual(parameters.return_columns, expectedColumns);
+    assert.deepEqual(Object.keys(parameters.return_specs), expectedColumns);
+    for (const [index, column] of expectedColumns.entries()) {
+      const k = Math.floor(index / 2) + 1;
+      assert.deepEqual(parameters.return_specs[column], {
+        kind: "simple", periods: 1, lag: index % 2 === 0 ? k - 1 : k,
+        session: index % 2 === 0 ? "overnight" : "intraday", turnover_period: k
+      });
+    }
+    assert.equal(report.annualTradingDays, 252);
+    assert.equal(report.files.group_turnover, "/reports/factor/group_turnover.parquet");
+    const roundTrip = parser.parseNotebookReport(JSON.parse(JSON.stringify(manifest("factor", { parameters }))), path);
+    assert.deepEqual(JSON.parse(JSON.stringify(roundTrip.parameters)), parameters);
+  });
+}
+
+test("factor max_lag rejects invalid values and ambiguous or missing analysis without defaulting", () => {
+  const existing = reportModule(parser);
+  for (const maxLag of [undefined, null, false, true, "2", 0, -1, 1.5, NaN, Infinity, -Infinity, [], {}, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => existing.parseReport(factorRun({ max_lag: maxLag }), "/reports/factor", "factor"), /max_lag.*正整数/);
+  }
+  for (const returnPeriods of [[1, 2], [], null, undefined]) {
+    assert.throws(() => existing.parseReport(factorRun({ max_lag: 2, return_periods: returnPeriods }), "/reports/factor", "factor"), /不能同时提供/);
+  }
+  assert.throws(() => existing.parseReport(factorRun({}), "/reports/factor", "factor"), /缺少收益持有期/);
+});
+
+test("legacy factor return_periods retain their close-to-close durations and no lag metadata", () => {
+  const existing = reportModule(parser);
+  const report = existing.parseReport(factorRun({ return_periods: [3, 1, 2] }), "/reports/factor", "factor");
+  const expected = {
+    factor_columns: ["momentum"], return_columns: ["return_3", "return_1", "return_2"],
+    return_specs: { return_3: { kind: "simple", periods: 3 }, return_1: { kind: "simple", periods: 1 }, return_2: { kind: "simple", periods: 2 } },
+    n_groups: 5, n_select: 10
+  };
+  assert.deepEqual(JSON.parse(JSON.stringify(report.parameters)), expected);
+  assert.deepEqual(JSON.parse(JSON.stringify(parser.parseNotebookReport(manifest("factor", { parameters: expected }), path).parameters)), expected);
+  for (const returnPeriods of [undefined, null, [], [0], [-1], [1.5], ["2"], [NaN], [Infinity]]) {
+    assert.throws(() => existing.parseReport(factorRun({ return_periods: returnPeriods }), "/reports/factor", "factor"), /报告/);
+  }
+});
+
+test("provided lag and session metadata match the label and single-segment duration", () => {
+  const good = {
+    factor_columns: ["momentum"], ...JSON.parse(JSON.stringify(factorReturns.laggedReturns(2))), n_groups: 5, n_select: 10
+  };
+  const valid = good.return_specs.r1o;
+  const invalid = [
+    ...[null, -1, 0, 1.5, "1", Infinity, NaN].map((lag) => ({ ...valid, lag })),
+    ...[null, "night", "intraday"].map((session) => ({ ...valid, session })),
+    ...[null, 0, -1, 1.5, "2", Infinity, NaN].map((turnover_period) => ({ ...valid, turnover_period })),
+    { ...valid, kind: "log" }, { ...valid, periods: 2 },
+    { kind: "simple", periods: 1, lag: 0, session: "intraday", turnover_period: 1 }
+  ];
+  for (const spec of invalid) {
+    assert.throws(() => parser.parseNotebookReport(manifest("factor", { parameters: {
+      ...good, return_specs: { ...good.return_specs, r1o: spec }
+    } }), path), /报告收益时段规格与标签不一致/);
+  }
+  for (const column of ["return_1", "r01o", "r1", "custom"]) {
+    assert.throws(() => parser.parseNotebookReport(manifest("factor", { parameters: {
+      ...good, return_columns: [column], return_specs: { [column]: valid }
+    } }), path), /报告收益时段规格与标签不一致/);
+  }
+});
+
+test("extra return specs are ignored and display metadata can be partial and independent of turnover intervals", () => {
+  const good = { factor_columns: ["momentum"], ...JSON.parse(JSON.stringify(factorReturns.laggedReturns(2))), n_groups: 5, n_select: 10 };
+  for (const metadata of [{}, { lag: 1 }, { session: "overnight" }, { lag: 1, session: "overnight" }, { turnover_period: 7 }, { lag: 1, session: "overnight", turnover_period: 7 }]) {
+    const spec = { kind: "simple", periods: 1, ...metadata };
+    const parameters = { ...good, return_specs: { ...good.return_specs, r1o: spec, extra: { kind: "unused" } } };
+    const report = parser.parseNotebookReport(manifest("factor", { parameters }), path);
+    assert.deepEqual(JSON.parse(JSON.stringify(report.parameters.return_specs.r1o)), spec);
+    assert.equal(Object.hasOwn(report.parameters.return_specs, "extra"), false);
+  }
+});
+
+test("Notebook reports without metadata keep their declared specs even when column names contain numbers", () => {
+  const parameters = { factor_columns: ["momentum"], return_columns: ["r1o", "custom_30"],
+    return_specs: { r1o: { kind: "log", periods: 5 }, custom_30: { kind: "simple", periods: 1 } }, n_groups: 5, n_select: 10 };
+  assert.deepEqual(JSON.parse(JSON.stringify(parser.parseNotebookReport(manifest("factor", { parameters }), path).parameters)), parameters);
 });
 
 test("manifest and Parquet GETs forward decoded browser XSRF only on local Jupyter URLs", async () => {

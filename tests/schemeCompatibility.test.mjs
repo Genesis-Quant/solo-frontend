@@ -28,10 +28,12 @@ function load(relative, overrides = {}, globals = {}) {
 }
 
 const scheme = load("../src/assets/lib/scheme.ts");
+const factorReturns = load("../src/assets/lib/factorReturns.ts");
 
 for (const [left, right, expected] of [
   ["1.1.0", "1.1.7", true], ["1.1.7", "1.1.0", true],
-  ["v1.1.0", "1.1.7", true], ["1.10.0", "1.10.99", true],
+  ["1", "1.0.7", true], ["1.1", "1.1.7", true], ["1.10.0", "1.10.99", true],
+  ["1", "1.1", false], ["v1.1.0", "1.1.7", false],
   ["1.1.7", "1.0.7", false], ["1.1.7", "1.2.0", false],
   ["1.1.7", "2.1.7", false], ["1.1.0", "1.10.0", false],
   [null, null, false], [undefined, "1.1.0", false], ["bad", "bad", false]
@@ -50,9 +52,9 @@ function backtestManifest(version) {
   };
 }
 
-const reports = load("../src/assets/lib/reports.ts", { "./scheme": scheme, "./settings": { apiUrl: "/api/v1" } });
+const reports = load("../src/assets/lib/reports.ts", { "./scheme": scheme, "./factorReturns": factorReturns, "./settings": { apiUrl: "/api/v1" } });
 
-for (const version of ["1.0.1", "1.1.0", "1.1.7", "1.2.0", "1.99.9"]) {
+for (const version of ["1", "1.0", "1.0.1", "1.1.0", "1.1.7", "1.2.0", "1.99.9"]) {
   test(`report ${version} still uses the major-1 adapter`, () => {
     assert.equal(scheme.supportsScheme(version), true);
     const report = reports.parseReport(backtestManifest(version), "/reports/example", "strategy");
@@ -62,6 +64,13 @@ for (const version of ["1.0.1", "1.1.0", "1.1.7", "1.2.0", "1.99.9"]) {
   });
 }
 
+test("Scheme versions accept only one to three formal numeric segments", () => {
+  for (const version of ["v1.2.3", "1.2.3a1", "1.2.3rc1", "1.2.3+build", "1.2.3.4", "1.2.3\n", " 1.2.3", "1.", ".1", ""]) {
+    assert.equal(scheme.schemeMajor(version), null);
+    assert.equal(scheme.sameSchemeSeries(version, version), false);
+  }
+});
+
 test("report dispatch rejects unknown major rather than falling back", () => {
   assert.equal(scheme.supportsScheme("2.1.0"), false);
   assert.throws(() => reports.parseReport(backtestManifest("2.1.0"), "/reports/example", "strategy"), /尚不支持/);
@@ -69,7 +78,7 @@ test("report dispatch rejects unknown major rather than falling back", () => {
 
 test("report loading accepts different minors of the requested major", async () => {
   const calls = [];
-  const loader = load("../src/assets/lib/reports.ts", { "./scheme": scheme, "./settings": { apiUrl: "/api/v1" } }, {
+  const loader = load("../src/assets/lib/reports.ts", { "./scheme": scheme, "./factorReturns": factorReturns, "./settings": { apiUrl: "/api/v1" } }, {
     fetch: async (url) => {
       calls.push(url);
       return { ok: true, json: async () => backtestManifest("1.2.7") };

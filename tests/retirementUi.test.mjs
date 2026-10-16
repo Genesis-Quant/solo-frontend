@@ -77,7 +77,7 @@ const forms = Object.fromEntries(stageNames.map((kind) => [kind, { schema: { pro
 
 function fixture(relative, { projects = [], artifacts = projects.flatMap((record) => record.versions.map((version) => ({
   id: `${record.id}-artifact`, kind: record.kind, package: `${record.kind}-1234`, version: "1.2.1",
-  sha256: "a".repeat(64), filename: "actual.whl", entry: "algo:entry", sources: {}, dependencies: {},
+  filename: "actual.whl", entry: "algo:entry", sources: {}, dependencies: {},
   schemeVersion: version.dependencies.find((dependency) => dependency.name === "scheme")?.version,
   sourceProjectId: record.id, sourceProjectName: record.name, sourceVersionId: version.id,
   publishedAt: record.archived ? null : "2026-10-07T00:00:00Z",
@@ -265,6 +265,8 @@ test("a retired 1.0.1 version keeps its actual historical report, Jupyter, logs 
     assert.match(html, /版本已退役/);
     assert.match(html, /Scheme 1.0.1 已退役/);
     assert.match(html, /data-report="1.0.1"/);
+    assert.match(html, /当前项目环境（非历史运行依赖）/);
+    assert.match(html, /Scheme 1.2.0 · Algo v1.2.0/);
     assert.match(html, /href="\/api\/v1\/projects\/history\/jupyter"/);
     assert.equal(app.button("发布版本").props.disabled, true);
     const history = app.elements("SelectItem").find((item) => item.props.value === "history-version");
@@ -300,7 +302,8 @@ test("a retired project without runs shows retirement help rather than encouragi
   const app = detail(record);
   try {
     assert.match(app.html(), /版本已退役/);
-    assert.match(app.html(), /请使用活跃版本新建项目/);
+    assert.match(app.html(), /可从项目列表“升级版本”更新环境后开展新研究/);
+    assert.doesNotMatch(app.html(), /请使用活跃版本新建项目开展研究/);
     assert.doesNotMatch(app.html(), /在 Jupyter 中完成研究后提交版本/);
     assert.deepEqual(app.requests, []);
   } finally { app.close(); }

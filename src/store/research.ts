@@ -11,6 +11,7 @@ interface ResearchStore {
   loadProjects: () => Promise<void>;
   createProject: (name: string, description: string, kind: ProjectKind, schemeVersion: string, algoVersion: string) => Promise<string>;
   editProject: (id: string, name: string, description: string) => Promise<void>;
+  upgradeProject: (id: string, schemeVersion: string, algoVersion: string) => Promise<void>;
   removeProject: (id: string, deleteFiles?: boolean) => Promise<void>;
   publishVersion: (projectId: string, versionId: string) => Promise<ResearchVersion>;
 }
@@ -98,6 +99,13 @@ export const useResearchStore = create<ResearchStore>((set, get) => {
     },
     editProject: async (id, name, description) => {
       const project = projectFromApi(await client.patch<ResearchProject>(`/projects/${id}`, { name, description }));
+      markChanged(id);
+      set((state) => ({ projects: state.projects.map((item) => item.id === id ? reconcileProject(item, project) : item) }));
+    },
+    upgradeProject: async (id, schemeVersion, algoVersion) => {
+      const project = projectFromApi(await client.post<ResearchProject>(`/projects/${id}/upgrade`, {
+        scheme_version: schemeVersion, algo_version: algoVersion
+      }));
       markChanged(id);
       set((state) => ({ projects: state.projects.map((item) => item.id === id ? reconcileProject(item, project) : item) }));
     },

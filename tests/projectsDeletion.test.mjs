@@ -69,6 +69,7 @@ function fixture() {
     "@/assets/lib/requestError": { RequestError },
     "react-router-dom": { Link: ui.Link, useNavigate: () => () => {} },
     "@/components/modal/ProjectDialog": { __esModule: true, default: ui.ProjectDialog },
+    "@/components/modal/ProjectUpgradeDialog": { __esModule: true, default: ui.ProjectUpgradeDialog },
     "@/components/table/ProjectDataTable": { __esModule: true, default: ui.ProjectDataTable },
     "@/hooks/useProjectTable": { useProjectTable: () => ({ resetPage() {} }) },
     "@/components/bar/PageHeader": { PageHeader: ui.PageHeader, pageContainer: "page-container" },
@@ -117,6 +118,30 @@ function assertReset(app) {
   assert.equal(app.node("AlertDialogAction").props.disabled, false);
   assert.equal(text(app.node("AlertDialogAction")), "删除项目");
 }
+
+test("upgrade menu opens the shared dialog for active and retired projects, follows fresh metadata and closes", () => {
+  const app = fixture();
+  for (const retired of [false, true]) {
+    const record = { ...app.projects[0], retired };
+    app.state.projects = [record];
+    app.render();
+    const actions = app.node("ProjectDataTable").props.columns.find((column) => column.id === "actions").cell(record);
+    const menu = elements(actions, "DropdownMenuItem").find((node) => text(node) === "升级版本");
+    assert.ok(menu);
+    assert.ok(!menu.props.disabled);
+    menu.props.onSelect();
+    app.render();
+    assert.equal(app.node("ProjectUpgradeDialog").props.project, record);
+    const refreshed = { ...record, schemeVersion: "new-release" };
+    app.state.projects = [refreshed];
+    app.render();
+    assert.equal(app.node("ProjectUpgradeDialog").props.project, refreshed);
+    app.node("ProjectUpgradeDialog").props.onClose();
+    app.render();
+    assert.equal(app.node("ProjectUpgradeDialog"), undefined);
+  }
+  assert.equal(app.requests.length, 0);
+});
 
 test("true deletion defaults to a checked native workspace-only checkbox with exact directory and truthful warning", () => {
   const app = fixture();

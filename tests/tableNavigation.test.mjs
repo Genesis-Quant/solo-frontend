@@ -69,7 +69,7 @@ function createHarness() {
     "@/store/research": { useResearchStore: (selector) => selector(research) },
     "@/store/strategy": { useStrategyStore: (selector) => selector(strategies), useStrategyPolling: () => {} },
     "@/store/pageMemory": { usePageState: (_scope, _key, initial) => React.useState(initial) },
-    ...Object.fromEntries(["ProjectDialog", "TaskLogDialog", "StrategyDialog"].map((name) => [`@/components/modal/${name}`, { __esModule: true, default: blocked }]))
+    ...Object.fromEntries(["ProjectDialog", "ProjectUpgradeDialog", "TaskLogDialog", "StrategyDialog"].map((name) => [`@/components/modal/${name}`, { __esModule: true, default: blocked }]))
   };
   const load = moduleLoader(overrides);
   const tableUi = load(join(root, "src/ui/table.tsx"));

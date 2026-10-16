@@ -3,6 +3,7 @@ import type { ProjectKind, ResearchVersion } from "@/types/research";
 import type { FactorReportParameters } from "@/types/factor";
 import { apiUrl } from "./settings";
 import { schemeMajor, supportsScheme } from "./scheme";
+import { laggedReturns } from "./factorReturns";
 
 export type ReportProjectKind = ProjectKind | "strategy";
 
@@ -40,19 +41,30 @@ function positiveInteger(value: unknown): number {
 function readV1(input: Record<string, unknown>, files: Record<string, string>, schemeVersion: string, reportKind: unknown): ReportData {
   if (reportKind !== "factor" && reportKind !== "backtest") throw new Error("未知报告类型");
   const kind = reportKind;
-  for (const name of kind === "factor" ? ["information_coefficient", "group_returns"] : ["daily_portfolios", "trade_details", "daily_positions", "daily_trading_statistics"]) {
+  for (const name of kind === "factor" ? ["information_coefficient", "group_returns"] : []) {
     if (!files[name]) throw new Error(`报告缺少 ${name}`);
   }
   const data: ReportData = { schemeVersion, kind, files, annualTradingDays: 252, riskFreeRate: 0 };
   if (kind === "factor") {
     const analysis = object(input.analysis);
     if (!Array.isArray(analysis.columns) || !analysis.columns.length || !analysis.columns.every((s) => typeof s === "string" && s)) throw new Error("报告缺少因子列");
-    if (!Array.isArray(analysis.return_periods) || !analysis.return_periods.length) throw new Error("报告缺少收益持有期");
-    const periods = analysis.return_periods.map(positiveInteger);
+    const hasMaxLag = Object.hasOwn(analysis, "max_lag");
+    if (hasMaxLag && Object.hasOwn(analysis, "return_periods")) throw new Error("报告 max_lag 与 return_periods 不能同时提供");
+    let returns: Pick<FactorReportParameters, "return_columns" | "return_specs">;
+    if (hasMaxLag) {
+      returns = laggedReturns(analysis.max_lag);
+    } else {
+      // 旧清单仍表示多日收盘到收盘收益，不转换为新的隔夜 / 日内标签。
+      if (!Array.isArray(analysis.return_periods) || !analysis.return_periods.length) throw new Error("报告缺少收益持有期");
+      const periods = analysis.return_periods.map(positiveInteger);
+      returns = {
+        return_columns: periods.map((period) => `return_${period}`),
+        return_specs: Object.fromEntries(periods.map((period) => [`return_${period}`, { kind: "simple", periods: period }]))
+      };
+    }
     data.parameters = {
       factor_columns: analysis.columns,
-      return_columns: periods.map((period) => `return_${period}`),
-      return_specs: Object.fromEntries(periods.map((period) => [`return_${period}`, { kind: "simple", periods: period }])),
+      ...returns,
       n_groups: positiveInteger(analysis.groups),
       n_select: positiveInteger(analysis.n_select)
     };
@@ -72,7 +84,7 @@ export function parseReport(manifest: unknown, outputUrl: string, projectKind: R
   const input = object(run.input);
   if (input.kind !== projectKind) throw new Error("报告任务类型与项目不一致");
   const files = Object.fromEntries(Object.entries(object(run.reports)).map(([name, file]) => {
-    if (typeof file !== "string" || !/^[\w.-]+\.parquet$/.test(file)) throw new Error("报告文件名无效");
+    if (typeof file !== "string" || !file || file === "." || file === ".." || /[\\/:\u0000-\u001f\u007f-\u009f]/.test(file)) throw new Error("报告文件名无效");
     return [name, `${outputUrl}/${encodeURIComponent(file)}`];
   }));
   return adapter(input, files, version as string, run.report_kind);

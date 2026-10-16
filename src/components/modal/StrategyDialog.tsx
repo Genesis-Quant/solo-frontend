@@ -27,7 +27,7 @@ export default function StrategyDialog({ onClose, onCreated }: { onClose: () => 
   const [error, setError] = useState("");
   const candidates = artifacts.filter((artifact) => !!artifact.publishedAt && !artifact.retired && schemeMajor(artifact.schemeVersion) === 1);
   const model = candidates.find((artifact) => artifact.kind === "model" && artifact.id === selection.artifacts.model);
-  const selectionValid = !catalogError && !!model && strategyStages.every((kind) =>
+  const selectionValid = !!model && strategyStages.every((kind) =>
     !selection.artifacts[kind] || candidates.some((artifact) => artifact.kind === kind && artifact.id === selection.artifacts[kind]
       && sameSchemeSeries(artifact.schemeVersion, model.schemeVersion)));
   const stage = strategyStages[step - 1];

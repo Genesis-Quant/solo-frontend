@@ -1,7 +1,7 @@
 import studentTCdf from "@stdlib/stats-base-dists-t-cdf";
 
 import { BrowserDuckDb, duckDbDateValue } from "@/assets/lib/duckdb";
-import type { FactorMetricSummary, FactorMetrics, FactorReportParameters } from "@/types/factor";
+import type { FactorReportParameters } from "@/types/factor";
 
 export type InformationPoint = { time: string; ic: number | null; rankIc: number | null; icCumulative: number | null; rankIcCumulative: number | null };
 export type LongShortPoint = { time: string; value: number | null; cumulative: number | null };
@@ -11,7 +11,7 @@ export type DecayPoint = { returnColumn: string; label: string; position: number
 export type TurnoverGroup = { group: string; value: number | null };
 export type TurnoverSummary = { periods: number; rankAutocorrelation: number | null; groups: TurnoverGroup[] };
 export type ExecutionFilterStatistic = { name: string; count: number };
-export type ExecutionStatisticPoint = { time: string; sourceCount: number; filteredCount: number; retentionRate: number | null; filters: ExecutionFilterStatistic[] };
+export type ExecutionStatisticPoint = { time: string; sourceCount: number; filteredCount: number; filters: ExecutionFilterStatistic[] };
 export type FactorDateRange = { start: string; end: string };
 
 export class FactorAnalytics {
@@ -21,8 +21,7 @@ export class FactorAnalytics {
     private readonly groupsFile: string,
     private readonly turnoverFile: string | null,
     private readonly executionStatisticsFile: string | null,
-    private readonly parameters: FactorReportParameters,
-    private readonly executionFilterIndices: number[]
+    private readonly parameters: FactorReportParameters
   ) {}
 
   static async create(
@@ -41,39 +40,7 @@ export class FactorAnalytics {
     if (turnoverFile && files.turnover) registeredFiles[turnoverFile] = files.turnover;
     if (executionStatisticsFile && files.executionStatistics) registeredFiles[executionStatisticsFile] = files.executionStatistics;
     const database = await BrowserDuckDb.create(registeredFiles);
-    const executionFilterIndices = executionStatisticsFile
-      ? (await database.rows(`DESCRIBE SELECT * FROM read_parquet(${literal(executionStatisticsFile)})`))
-        .map((row) => /^filter(\d+)_count$/.exec(String(row.column_name)))
-        .filter((match): match is RegExpExecArray => match !== null)
-        .map((match) => Number(match[1]))
-        .sort((left, right) => left - right)
-      : [];
-    return new FactorAnalytics(database, informationFile, groupsFile, turnoverFile, executionStatisticsFile, parameters, executionFilterIndices);
-  }
-
-  async metrics(): Promise<FactorMetrics> {
-    const metrics: FactorMetrics = {};
-    const rows = await this.rows(factorMetricsSql(
-      this.informationFile,
-      this.groupsFile,
-      this.parameters.factor_columns,
-      this.parameters.return_columns,
-      this.parameters.return_specs
-    ));
-    for (const row of rows) {
-      const factor = String(row.factor_name);
-      const returnColumn = String(row.return_column);
-      if (!metrics[factor]) metrics[factor] = {};
-      metrics[factor][returnColumn] = metricSummary(row, row);
-    }
-    return metrics;
-  }
-
-  async dateRange(factor: string, returnColumn: string): Promise<FactorDateRange> {
-    const ic = identifier(`${factor}_${returnColumn}_ic`);
-    const rank = identifier(`${factor}_${returnColumn}_rank_ic`);
-    const row = (await this.rows(`SELECT min(time) AS start_time, max(time) AS end_time FROM read_parquet(${literal(this.informationFile)}) WHERE ${ic} IS NOT NULL OR ${rank} IS NOT NULL`))[0] ?? {};
-    return { start: duckDbDateValue(row.start_time), end: duckDbDateValue(row.end_time) };
+    return new FactorAnalytics(database, informationFile, groupsFile, turnoverFile, executionStatisticsFile, parameters);
   }
 
   async informationSeries(factor: string, returnColumn: string, range?: FactorDateRange): Promise<InformationPoint[]> {
@@ -104,9 +71,9 @@ export class FactorAnalytics {
     const realized = spec.kind === "log" ? "exp(raw_value) - 1" : "raw_value";
     const cumulative = spec.periods !== 1
       ? "NULL::DOUBLE"
-      : spec.kind === "log"
+      : `CASE WHEN raw_value IS NULL THEN NULL ELSE ${spec.kind === "log"
         ? "exp(sum(raw_value) OVER (ORDER BY time ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) - 1"
-        : "product(1 + raw_value) OVER (ORDER BY time ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) - 1";
+        : "product(1 + raw_value) OVER (ORDER BY time ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) - 1"} END`;
     const rows = await this.rows(`
       WITH daily AS (
         SELECT time, ${high} - ${low} AS raw_value
@@ -130,9 +97,9 @@ export class FactorAnalytics {
         const window = `ORDER BY time ${direction} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`;
         const cumulative = spec.periods !== 1
           ? "NULL::DOUBLE"
-          : spec.kind === "log"
+          : `CASE WHEN ${source} IS NULL THEN NULL ELSE ${spec.kind === "log"
             ? `exp(sum(${source}) OVER (${window}))`
-            : `product(1 + ${source}) OVER (${window})`;
+            : `product(1 + ${source}) OVER (${window})`} END`;
         return `${cumulative} AS ${identifier(`${direction === "DESC" ? "reverse_" : ""}series_${index}`)}`;
       });
     });
@@ -210,20 +177,19 @@ export class FactorAnalytics {
 
   async executionStatistics(range?: FactorDateRange): Promise<ExecutionStatisticPoint[]> {
     if (!this.executionStatisticsFile) return [];
-    const filterColumns = this.executionFilterIndices.flatMap((index) => [`filter${index}_name`, `filter${index}_count`]);
-    const columns = ["time", "source_count", ...filterColumns, "filtered_count", "retention_rate"];
     const rows = await this.rows(`
-      SELECT ${columns.map(identifier).join(", ")}
-      FROM read_parquet(${literal(this.executionStatisticsFile)})
+      SELECT * FROM read_parquet(${literal(this.executionStatisticsFile)})
       ${dateFilter(range)}
       ORDER BY time
     `);
+    const filterIndices = Object.keys(rows[0] ?? {})
+      .flatMap((column) => { const match = /^filter(\d+)_count$/.exec(column); return match ? [Number(match[1])] : []; })
+      .sort((left, right) => left - right);
     return rows.map((row) => ({
       time: duckDbDateValue(row.time),
       sourceCount: integerValue(row.source_count),
       filteredCount: integerValue(row.filtered_count),
-      retentionRate: numberValue(row.retention_rate),
-      filters: this.executionFilterIndices.map((index) => ({
+      filters: filterIndices.map((index) => ({
         name: String(row[`filter${index}_name`]),
         count: integerValue(row[`filter${index}_count`])
       }))
@@ -243,54 +209,6 @@ export class FactorAnalytics {
   }
 }
 
-function factorMetricsSql(
-  informationFile: string,
-  groupsFile: string,
-  factors: string[],
-  returnColumns: string[],
-  returnSpecs: FactorReportParameters["return_specs"]
-) {
-  const pairs = factors.flatMap((factor) => returnColumns.map((returnColumn) => ({ factor, returnColumn })));
-  const information = pairs.map(({ factor, returnColumn }) => `SELECT ${literal(factor)} AS factor_name, ${literal(returnColumn)} AS return_column, ${identifier(`${factor}_${returnColumn}_ic`)} AS ic, ${identifier(`${factor}_${returnColumn}_rank_ic`)} AS rank_ic FROM read_parquet(${literal(informationFile)})`).join(" UNION ALL ");
-  const returns = pairs.map(({ factor, returnColumn }) => {
-    const [lowColumn, highColumn] = endpointColumnNames(factor, returnColumn);
-    const low = identifier(lowColumn);
-    const high = identifier(highColumn);
-    const spec = returnSpecs[returnColumn];
-    const spread = `${high} - ${low}`;
-    const value = spec.kind === "log" ? `exp(${spread}) - 1` : spread;
-    return `SELECT ${literal(factor)} AS factor_name, ${literal(returnColumn)} AS return_column, time, ${value} AS value, ${spec.periods === 1 ? "true" : "false"} AS eligible FROM read_parquet(${literal(groupsFile)}) WHERE ${high} IS NOT NULL AND ${low} IS NOT NULL`;
-  }).join(" UNION ALL ");
-  return `
-    WITH information_values AS (${information}),
-    information_metrics AS (
-      SELECT factor_name, return_column, count(ic) AS observations, avg(ic) AS ic_mean, stddev_samp(ic) AS ic_std,
-        avg(ic) / nullif(stddev_samp(ic), 0) AS ic_ir,
-        count_if(ic > 0)::DOUBLE / nullif(count(ic), 0) AS ic_positive_ratio,
-        avg(rank_ic) AS rank_ic_mean, stddev_samp(rank_ic) AS rank_ic_std,
-        avg(rank_ic) / nullif(stddev_samp(rank_ic), 0) AS rank_ic_ir,
-        count_if(rank_ic > 0)::DOUBLE / nullif(count(rank_ic), 0) AS rank_ic_positive_ratio
-      FROM information_values GROUP BY factor_name, return_column
-    ), nav AS (
-      SELECT *, product(1 + value) OVER (PARTITION BY factor_name, return_column ORDER BY time ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS wealth
-      FROM (${returns}) WHERE eligible
-    ), drawdown AS (
-      SELECT *, wealth / greatest(1.0, max(wealth) OVER (PARTITION BY factor_name, return_column ORDER BY time ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) - 1 AS drawdown
-      FROM nav
-    ), return_summary AS (
-      SELECT factor_name, return_column, count(value) AS return_observations, product(1 + value) AS growth,
-        stddev_pop(value) * sqrt(252.0) AS annual_volatility, abs(min(drawdown)) AS max_drawdown
-      FROM drawdown GROUP BY factor_name, return_column
-    )
-    SELECT information_metrics.*, return_summary.return_observations, return_summary.growth - 1 AS cumulative_return,
-      CASE WHEN return_summary.growth >= 0 THEN power(return_summary.growth, 252.0 / return_summary.return_observations) - 1 END AS annual_return,
-      return_summary.annual_volatility,
-      CASE WHEN return_summary.annual_volatility > 0 AND return_summary.growth >= 0 THEN (power(return_summary.growth, 252.0 / return_summary.return_observations) - 1) / return_summary.annual_volatility END AS sharpe,
-      return_summary.max_drawdown
-    FROM information_metrics LEFT JOIN return_summary USING (factor_name, return_column)
-  `;
-}
-
 function endpointColumnNames(factor: string, returnColumn: string): [string, string] {
   return [`${factor}_${returnColumn}_bottom`, `${factor}_${returnColumn}_top`];
 }
@@ -307,16 +225,6 @@ function groupDefinitions(factor: string, returnColumn: string, nGroups: number,
     ...groups,
     { column: top, label: `最大 ${nSelect} 支` }
   ];
-}
-
-function metricSummary(information: Record<string, unknown>, longShort: Record<string, unknown>): FactorMetricSummary {
-  return {
-    observations: integerValue(information.observations),
-    ic_mean: numberValue(information.ic_mean), ic_std: numberValue(information.ic_std), ic_ir: numberValue(information.ic_ir), ic_positive_ratio: numberValue(information.ic_positive_ratio),
-    rank_ic_mean: numberValue(information.rank_ic_mean), rank_ic_std: numberValue(information.rank_ic_std), rank_ic_ir: numberValue(information.rank_ic_ir), rank_ic_positive_ratio: numberValue(information.rank_ic_positive_ratio),
-    long_short_cumulative_return: numberValue(longShort.cumulative_return), long_short_annual_return: numberValue(longShort.annual_return),
-    long_short_annual_volatility: numberValue(longShort.annual_volatility), long_short_sharpe: numberValue(longShort.sharpe), long_short_max_drawdown: numberValue(longShort.max_drawdown)
-  };
 }
 
 function identifier(value: string) {

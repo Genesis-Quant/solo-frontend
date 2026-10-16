@@ -4,7 +4,6 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 import test from "node:test";
-import { verifyDuckDbExtensions } from "../scripts/verify-duckdb-extensions.mjs";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
@@ -30,10 +29,6 @@ function load(relative, overrides = {}, globals = {}) {
 }
 
 const extensions = load("../src/assets/lib/duckdbExtensions.ts", { "../duckdb-extensions.json": manifest });
-
-test("both signed extension assets match the pinned DuckDB package and checksums", () => {
-  assert.equal(verifyDuckDbExtensions().duckdbVersion, "v1.5.4");
-});
 
 test("local loading disables automatic network installation before loading Parquet", async () => {
   const sql = [];

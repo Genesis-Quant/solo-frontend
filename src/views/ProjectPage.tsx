@@ -213,6 +213,10 @@ function ProjectDetail({
               <Pencil />
             </Button>
           </div>
+          <div className="space-y-1 text-xs text-muted-foreground">
+            <p className="font-medium">当前项目环境（非历史运行依赖）</p>
+            <p className="break-all font-mono">Scheme {project.schemeVersion ?? "未记录"} · Algo {project.algoVersion}</p>
+          </div>
           <VersionSummary project={project} version={version} changeVersion={changeVersion} />
         </div>
         {version && (
@@ -330,8 +334,7 @@ function ProjectDetail({
                       <Button asChild variant="link" className="h-auto max-w-full justify-start p-0 text-xs">
                         <a className="break-all whitespace-normal font-mono" href={artifactWheelUrl(version.artifactId ?? version.artifact.id)} download>{version.artifact.filename}</a>
                       </Button>
-                      <p className="text-muted-foreground">{artifactSize(version.artifact.size ?? version.artifact.sizeBytes)}</p>
-                      <p className="break-all font-mono text-muted-foreground" title="SHA256">SHA256 {version.artifact.sha256}</p>
+                      <p className="text-muted-foreground">{artifactSize(version.artifact.sizeBytes)}</p>
                       {version.artifact.entry && <p className="break-all font-mono text-muted-foreground">Entry {version.artifact.entry}</p>}
                     </>
 : <>
@@ -381,7 +384,7 @@ function ProjectDetail({
             <AlertTitle>版本已退役</AlertTitle>
             <AlertDescription>
               {retiredReasons.map((reason) => <p key={reason}>{reason}</p>)}
-              <p>历史报告、产物、日志及 Jupyter 仍可查看；不能保存新研究版本、发布或用于新策略。退役项目仅可修改描述注释，仍可永久删除项目；已发布成果及独立下游不受删除影响。</p>
+              <p>历史报告、产物、日志及 Jupyter 仍可查看；退役环境不能保存新研究版本，退役 run 不能发布或用于新策略。可在项目列表操作菜单中“升级版本”更新项目环境，也可修改描述注释或永久删除项目；升级不会使历史退役 run 恢复活跃，已发布成果及独立下游不受删除影响。</p>
             </AlertDescription>
           </Alert>
         )}
@@ -402,7 +405,7 @@ function ProjectDetail({
               </EmptyTitle>
               <EmptyDescription>
                 {project.retired
-                  ? "项目已退役，可在 Jupyter 中查看历史研究；请使用活跃版本新建项目开展研究。"
+                  ? "项目已退役，可在 Jupyter 中查看历史研究；可从项目列表“升级版本”更新环境后开展新研究，或使用活跃版本新建项目。"
                   : "在 Jupyter 中完成研究后提交版本"}
               </EmptyDescription>
             </EmptyHeader>
@@ -696,9 +699,6 @@ function VersionSummary({ project, version, changeVersion }: { project: Research
                 {project.description || "暂无描述"}
               </p>
               <Badge variant="outline">未提交</Badge>
-              <p className="text-xs text-muted-foreground">
-                Scheme {project.schemeVersion ?? "未记录"} · Algo {project.algoVersion}
-              </p>
             </>
           )}
   </>);

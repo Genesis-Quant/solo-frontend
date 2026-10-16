@@ -22,9 +22,9 @@ npm run build
 
 ## DuckDB 本地扩展
 
-报告页的 DuckDB Worker、主 WASM 和 Parquet 扩展均随前端部署，不向 `extensions.duckdb.org` 发起运行时下载。`public/duckdb-extensions/v1.5.4/` 保存 EH 与 MVP 两个平台的签名扩展，`src/assets/duckdb-extensions.json` 记录对应 npm/Core 版本、官方来源、字节数及 SHA256。现有资源复用本机历史官方缓存的原始字节，并由 DuckDB 校验签名和版本；没有启用 unsigned 或 metadata-mismatch 选项。
+报告页的 DuckDB Worker、主 WASM 和 Parquet 扩展均随前端部署，不向 `extensions.duckdb.org` 发起运行时下载。`public/duckdb-extensions/v1.5.4/` 保存 EH 与 MVP 两个平台的签名扩展，`src/assets/duckdb-extensions.json` 记录对应 npm/Core 版本、官方来源和字节数。现有资源复用本机历史官方缓存的原始字节，并由 DuckDB 校验签名和版本；没有启用 unsigned 或 metadata-mismatch 选项。
 
-初始化显式配置同源扩展仓库并 `LOAD parquet`，关闭自动安装和自动加载；本地资源缺失时直接显示部署错误，不回退到外部下载。`@duckdb/duckdb-wasm` 精确固定为 `1.33.1-dev57.0`。`npm run verify:duckdb` 验证包版本和扩展校验值，开发启动、生产构建与 Docker 镜像构建均运行该检查。升级 DuckDB 必须同步更新两个平台的扩展和清单，保持签名校验开启。
+初始化显式配置同源扩展仓库并 `LOAD parquet`，关闭自动安装和自动加载；本地资源缺失时直接显示部署错误，不回退到外部下载。`@duckdb/duckdb-wasm` 精确固定为 `1.33.1-dev57.0`。升级 DuckDB 必须同步更新两个平台的扩展和清单，保持签名校验开启。
 
 Vite 将整个 `public` 目录复制到 `dist`；静态部署时应一起发布 `dist/duckdb-extensions`，Docker 镜像也包含它。此配置覆盖工作台和 Notebook iframe，不改写已有 Scheme 独立 HTML 中冻结的报告资源。
 
@@ -69,7 +69,9 @@ http://127.0.0.1:5174/embed/report?source=jupyter&path=projects/factor/X/reports
 }
 ```
 
-当前只支持 Scheme 1.x；必需文件与现有 v1 运行报告一致：因子需要 `information_coefficient`、`group_returns`，回测需要 `daily_portfolios`、`trade_details`、`daily_positions`、`daily_trading_statistics`。文件名只能是清单同目录下非隐藏、安全的 `.parquet` 文件名，不能包含路径、URL 或 `..`。`annualTradingDays` 必须为正整数，`riskFreeRate` 必须有限；`parameters` 仅用于 factor，因子列和收益列非空且不重复，收益规格一一对应（`simple` 或 `log`、正整数持有期），分组数及选股数为正整数。缺少元数据不猜测默认值。
+当前只支持 Scheme 1.x。因子需要 `information_coefficient`、`group_returns`；回测按所选页面读取对应文件，不要求打开报告时四类附件全部存在。文件名必须是清单同目录下的单个名称，允许中文、空格和点开头的名称，不限制扩展名，但拒绝空名、`.`、`..`、路径分隔符、冒号及控制字符。
+
+清单未提供 `theme` 时使用 `light`。回测的 `annualTradingDays` 默认 252，显式提供时必须为正整数；`riskFreeRate` 默认 0，显式提供时必须有限。因子报告固定使用 252 个年交易日和零无风险利率。`parameters` 仅用于 factor，因子列和收益列非空且不重复；每个收益列必须有对应的 `simple` 或 `log` 规格及正整数 `periods`，额外规格忽略。分组数及选股数为正整数。旧 `return_1` 等收盘到收盘收益与新版 `r0o`、`r1` 等隔夜/日内收益保持各自定义，不混为同一口径。
 
 ### Jupyter 同源代理与登录
 
@@ -89,7 +91,7 @@ Vite 开发服务器增加 `/jupyter` 代理并去掉该前缀，不改变 `/api
 `/embed/report?project=factor&version=1.0.0&path=<run-id>/report` 只展示报告，不加载工作台导航、项目列表和轮询。
 
 - `project`：`factor`、`model`、`optimize`、`control` 或 `execution`。
-- `version`：Scheme 版本（也接受 `v1.0.0`）；前端按主版本选择适配器，并检查报告清单中的实际 Scheme 主版本。
+- `version`：Scheme 实际包版本，接受 1～3 段纯数字，如 `1`、`1.6`、`1.6.3`，不接受带 `v` 的 Tag；前端按主版本选择适配器，并检查报告清单中的实际 Scheme 主版本。
 - `path`：共享 `/shared/runs` 下包含 `run.json` 的报告目录，可传相对路径或 `/shared/runs/...` 绝对路径。
 - `theme`：可选 `light` 或 `dark`，只影响 iframe，不改变工作台保存的主题偏好。
 
