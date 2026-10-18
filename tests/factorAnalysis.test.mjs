@@ -10,7 +10,7 @@ const ts = require("typescript");
 const React = require("react");
 const { renderToStaticMarkup } = require("react-dom/server");
 
-// Compile the real analytics/JSX with isolated data sources; no browser or database is contacted.
+// Compile the real analytics/JSX with isolated sources; SQL tests execute on DuckDB WASM.
 function load(relative, overrides = {}, extra = "") {
   const filename = fileURLToPath(new URL(relative, import.meta.url));
   const compiled = ts.transpileModule(readFileSync(filename, "utf8") + extra, {
@@ -52,115 +52,242 @@ async function analyticsFixture(input = parameters(), turnover = true) {
   return { session, queries };
 }
 
-test("new labels reach SQL verbatim and all use single-period compounding and 252 daily observations", async () => {
-  const input = parameters();
+test("current log labels reach SQL verbatim, stay independent, and keep all decay positions", async () => {
+  const input = priceParameters(1);
   const { session, queries } = await analyticsFixture(input);
   assert.equal(queries.length, 0, "creating analytics does not compute unused whole-report summaries");
-  for (const column of input.return_columns) {
-    await session.informationSeries("momentum_7", column);
-    assert.ok(queries.at(-1).includes(`"momentum_7_${column}_ic"`));
-    assert.ok(queries.at(-1).includes(`"momentum_7_${column}_rank_ic"`));
-    await session.longShortSeries("momentum_7", column);
-    assert.ok(queries.at(-1).includes(`"momentum_7_${column}_top" - "momentum_7_${column}_bottom"`));
-    assert.match(queries.at(-1), /product\(1 \+ raw_value\)/);
-    assert.doesNotMatch(queries.at(-1), /NULL::DOUBLE/);
-    await session.groupSeries("momentum_7", column, input.n_groups);
-    assert.ok(queries.at(-1).includes(`product(1 + "momentum_7_${column}_group0")`));
-    assert.doesNotMatch(queries.at(-1), /NULL::DOUBLE/);
+  for (const factor of input.factor_columns) for (const column of input.return_columns) {
+    await session.informationSeries(factor, column);
+    assert.ok(queries.at(-1).includes(`"${factor}_${column}_ic"`));
+    assert.ok(queries.at(-1).includes(`"${factor}_${column}_rank_ic"`));
+    await session.longShortSeries(factor, column);
+    assert.ok(queries.at(-1).includes(`"${factor}_${column}_top" - "${factor}_${column}_bottom"`));
+    assert.match(queries.at(-1), /sum\(value\) OVER/);
+    assert.doesNotMatch(queries.at(-1), /exp\(|product\(/);
+    await session.groupSeries(factor, column, input.n_groups);
+    assert.ok(queries.at(-1).includes(`"${factor}_${column}_group0" AS raw_1`));
+    assert.match(queries.at(-1), /exp\(sum\(value_1\) OVER/);
+    assert.doesNotMatch(queries.at(-1), /ln\(|product\(/);
+    for (const other of input.return_columns.filter((other) => other !== column)) assert.ok(!queries.at(-1).includes(`_${other}_`));
   }
-  const decay = await session.decay("momentum_7", input.return_columns);
+  const decay = await session.decay(input.factor_columns[0], input.return_columns);
   assert.deepEqual(Array.from(decay, (point) => point.label), Array.from(input.return_columns));
-  assert.deepEqual(Array.from(decay, (point) => point.position), [0, 1, 2, 3, 4, 5]);
+  assert.deepEqual(Array.from(decay, (point) => point.position), [0, 1, 2]);
 });
 
-test("P5L1..3 SQL uses metadata spans, keeps the whole decay axis and never compounds overlapping returns", async () => {
-  for (const period of [1, 5]) {
-    const input = priceParameters(period);
-    const { session, queries } = await analyticsFixture(input);
-    for (const factor of input.factor_columns) for (const column of input.return_columns) {
-      await session.informationSeries(factor, column, { start: "2026-01-06", end: "2026-01-07" });
-      assert.ok(queries.at(-1).includes(`"${factor}_${column}_ic"`));
-      assert.match(queries.at(-1), /BETWEEN DATE '2026-01-06' AND DATE '2026-01-07'/);
-      await session.longShortSeries(factor, column);
-      assert.equal(queries.at(-1).includes("NULL::DOUBLE AS cumulative"), period > 1);
-      await session.groupSeries(factor, column, 2);
-      assert.equal(queries.at(-1).includes('NULL::DOUBLE AS "series_0"'), period > 1);
-      await session.groupStatistics(factor, column, 2);
-      assert.ok(queries.at(-1).includes(`avg("${factor}_${column}_group0")`));
-    }
-    const decay = await session.decay(input.factor_columns[0], input.return_columns);
-    assert.deepEqual(Array.from(decay, (row) => row.returnColumn), Array.from(input.return_columns));
-    assert.ok(decay.every((row) => row.icMean === null && row.rankIcMean === null));
-  }
-});
-
-test("legacy and custom labels use declared periods rather than parsing digits from column names", async () => {
-  const input = { factor_columns: ["momentum_7"], return_columns: ["return_2", "r3", "custom_30"],
-    return_specs: { return_2: { kind: "simple", periods: 2 }, r3: { kind: "log", periods: 5 }, custom_30: { kind: "simple", periods: 1 } },
+test("all three return queries use metadata ROWS windows before date filtering", async () => {
+  const input = { factor_columns: ["momentum_7"], return_columns: ["P999L30", "custom_1", "r3"],
+    return_specs: { P999L30: { kind: "log", periods: 2 }, custom_1: { kind: "log", periods: 5 }, r3: { kind: "simple", periods: 1 } },
     n_groups: 2, n_select: 10 };
   const { session, queries } = await analyticsFixture(input);
-  for (const column of ["return_2", "r3"]) {
-    await session.longShortSeries("momentum_7", column);
-    assert.match(queries.at(-1), /NULL::DOUBLE AS cumulative/);
-    await session.groupSeries("momentum_7", column, 2);
-    assert.match(queries.at(-1), /NULL::DOUBLE AS "series_0"/);
+  for (const column of input.return_columns) {
+    const spec = input.return_specs[column];
+    for (const method of ["longShortSeries", "groupSeries", "groupStatistics"]) {
+      const range = { start: "2026-01-06", end: "2026-01-07" };
+      await session[method]("momentum_7", column, ...(method === "longShortSeries" ? [range] : [2, range]));
+      const sql = queries.at(-1);
+      assert.ok(sql.includes(`ROWS BETWEEN ${spec.periods - 1} PRECEDING AND CURRENT ROW`));
+      assert.match(sql, /CASE WHEN count\(raw_0\) OVER .* = count\(\*\) OVER .* THEN avg\(raw_0\) OVER/);
+      assert.ok(sql.indexOf("FROM raw_returns") < sql.indexOf("BETWEEN DATE '2026-01-06' AND DATE '2026-01-07'"));
+      assert.equal(sql.includes("ln(1 +"), spec.kind === "simple");
+      assert.doesNotMatch(sql, /NULL::DOUBLE AS|COALESCE|product\(/i);
+      if (method === "groupStatistics") assert.match(sql, /count\(value_1\).*avg\(value_1\).*stddev_samp\(value_1\)/);
+    }
   }
-  await session.longShortSeries("momentum_7", "custom_30");
-  assert.match(queries.at(-1), /product\(1 \+ raw_value\)/);
 });
 
-for (const kind of ["simple", "log"]) {
-  test(`${kind} cumulative SQL leaves trailing and intermediate return gaps in both curve directions`, async () => {
-    const duckdb = require("@duckdb/duckdb-wasm/blocking");
-    const modulePath = (variant) => fileURLToPath(new URL(`../node_modules/@duckdb/duckdb-wasm/dist/duckdb-${variant}.wasm`, import.meta.url));
-    const db = await duckdb.createDuckDB({ mvp: { mainModule: modulePath("mvp") }, eh: { mainModule: modulePath("eh") } }, new duckdb.VoidLogger(), duckdb.NODE_RUNTIME);
-    await db.instantiate();
-    const connection = db.connect();
-    try {
-      connection.query("SET autoinstall_known_extensions = false");
-      connection.query("SET autoload_known_extensions = false");
-      const columns = ["bottom", "group0", "group1", "top"].map((group) => `momentum_7_r3_${group}`);
-      const returns = [[0.01, 0.02, 0.03, 0.04], [null, null, 0.05, 0.06], [0.02, 0.04, 0.06, 0.08], [null, null, null, null], [null, null, null, null]];
-      const times = ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09"];
-      connection.query(`CREATE TABLE returns (time VARCHAR, ${columns.map((column) => `"${column}" DOUBLE`).join(", ")})`);
-      connection.query(`INSERT INTO returns VALUES ${returns.map((values, index) => `('${times[index]}', ${values.map((value) => value === null ? "NULL" : value).join(", ")})`).join(", ")}`);
-      const { FactorAnalytics } = load("../src/assets/lib/factorAnalysis.ts", {
-        "@/assets/lib/duckdb": { BrowserDuckDb: { create: async () => ({
-          async rows(sql) { return connection.query(sql.replace("read_parquet('factor-7-groups.parquet')", "returns")).toArray().map((row) => row.toJSON()); }
-        }) }, duckDbDateValue: String }
+const tradingDates = [
+  "2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08", "2026-01-09",
+  "2026-01-12", "2026-01-13", "2026-01-14", "2026-01-15", "2026-01-16",
+  "2026-01-19", "2026-01-20", "2026-01-21", "2026-01-22", "2026-01-23",
+  "2026-01-26", "2026-01-27", "2026-01-28", "2026-01-29", "2026-01-30"
+];
+const groupLabels = ["最小 10 支", "Group 1", "Group 2", "最大 10 支"];
+const rawLogReturns = [
+  [-0.02, 0.01, -0.03, 0.04], [0.04, -0.05, 0.02, -0.01],
+  [0.01, 0.03, 0.04, 0.02], [-0.03, 0.02, -0.01, 0.05],
+  [0.02, -0.04, 0.06, -0.02], [0.05, 0.01, -0.03, 0.03],
+  [null, null, null, null], [-0.02, 0.03, -0.02, 0.06],
+  [0.01, -0.01, 0.02, -0.04], [0.03, 0.02, null, 0.01],
+  [-0.01, 0.06, 0.04, 0.02], [0.04, -0.03, 0.01, -0.02],
+  [0.02, 0.05, -0.04, 0.03], [-0.02, 0.01, 0.03, 0.01],
+  [0.03, -0.02, 0.02, 0.05], [0.01, 0.04, 0.05, -0.03],
+  [-0.03, 0.03, -0.01, 0.02], [0.02, -0.01, 0.04, 0.06],
+  [null, null, null, null], [null, null, null, null]
+];
+
+async function duckDbFixture(input) {
+  const duckdb = require("@duckdb/duckdb-wasm/blocking");
+  const modulePath = (variant) => fileURLToPath(new URL(`../node_modules/@duckdb/duckdb-wasm/dist/duckdb-${variant}.wasm`, import.meta.url));
+  const db = await duckdb.createDuckDB({ mvp: { mainModule: modulePath("mvp") }, eh: { mainModule: modulePath("eh") } }, new duckdb.VoidLogger(), duckdb.NODE_RUNTIME);
+  await db.instantiate();
+  const connection = db.connect();
+  const raw = {}, queries = [], columns = [], informationColumns = [];
+  try {
+    connection.query("SET autoinstall_known_extensions = false");
+    connection.query("SET autoload_known_extensions = false");
+    for (const [factorIndex, factor] of input.factor_columns.entries()) for (const column of input.return_columns) {
+      const spec = input.return_specs[column];
+      const lag = spec.lag ?? 1;
+      raw[`${factor}_${column}`] = rawLogReturns.map((row, index) => row.map((value, group) => {
+        if (value === null || lag === 3 && index === 0 && group === 1 || lag === 2 && index === 2 && group === 0) return null;
+        return value * (1 + (lag - 1) / 2) + (lag - 1) * (group % 2 ? -0.009 : 0.007) + factorIndex * 0.002 * group;
+      }));
+      for (const [group, suffix] of ["bottom", "group0", "group1", "top"].entries()) columns.push({
+        name: `${factor}_${column}_${suffix}`,
+        values: raw[`${factor}_${column}`].map((row) => row[group] === null ? null : spec.kind === "simple" ? Math.expm1(row[group]) : row[group])
       });
-      const input = parameters(3);
-      input.return_specs.r3.kind = kind;
-      const session = await FactorAnalytics.create(7, { information: new ArrayBuffer(0), groups: new ArrayBuffer(0) }, input);
-      const longShort = await session.longShortSeries("momentum_7", "r3");
-      assert.deepEqual(Array.from(longShort, (point) => point.time), times);
-      assert.deepEqual(Array.from(longShort, (point) => point.value === null), [false, true, false, true, true]);
-      assert.deepEqual(Array.from(longShort, (point) => point.cumulative === null), [false, true, false, true, true]);
-      const close = (actual, expected) => assert.ok(Math.abs(actual - expected) < 1e-12, `${actual} != ${expected}`);
-      close(longShort[0].cumulative, kind === "log" ? Math.exp(0.03) - 1 : 0.03);
-      close(longShort[2].cumulative, kind === "log" ? Math.exp(0.09) - 1 : 1.03 * 1.06 - 1);
-      const groups = await session.groupSeries("momentum_7", "r3", input.n_groups);
-      for (const [column, label] of ["最小 10 支", "Group 1", "Group 2", "最大 10 支"].entries()) {
-        for (const direction of ["values", "reverseValues"]) {
-          let cumulative = kind === "log" ? 0 : 1;
-          const indices = times.map((_time, index) => index);
-          if (direction === "reverseValues") indices.reverse();
-          for (const index of indices) {
-            const value = returns[index][column];
-            if (value === null) assert.equal(groups[index][direction][label], null);
-            else {
-              cumulative = kind === "log" ? cumulative + value : cumulative * (1 + value);
-              close(groups[index][direction][label], kind === "log" ? Math.exp(cumulative) : cumulative);
-            }
-          }
-        }
-      }
-    } finally {
-      connection.close();
-      db.reset();
+      informationColumns.push(`${factor}_${column}_ic`, `${factor}_${column}_rank_ic`);
     }
+    connection.query(`CREATE TABLE returns (time DATE, ${columns.map(({ name }) => `"${name}" DOUBLE`).join(", ")})`);
+    connection.query(`INSERT INTO returns VALUES ${tradingDates.map((time, index) => `('${time}', ${columns.map(({ values }) => values[index] === null ? "NULL" : values[index]).join(", ")})`).join(", ")}`);
+    connection.query(`CREATE TABLE information (time DATE, ${informationColumns.map((column) => `"${column}" DOUBLE`).join(", ")})`);
+    connection.query(`INSERT INTO information VALUES ${tradingDates.map((time, index) => `('${time}', ${informationColumns.map((_column, columnIndex) => index === 6 ? "NULL" : (columnIndex + 1) / 100).join(", ")})`).join(", ")}`);
+    const { FactorAnalytics } = load("../src/assets/lib/factorAnalysis.ts", {
+      "@/assets/lib/duckdb": { BrowserDuckDb: { create: async () => ({
+        async rows(sql) {
+          queries.push(sql);
+          return connection.query(sql.replaceAll("read_parquet('factor-7-groups.parquet')", "returns").replaceAll("read_parquet('factor-7-information.parquet')", "information")).toArray().map((row) => row.toJSON());
+        },
+        async close() {}
+      }) }, duckDbDateValue: (value) => new Date(Number(value)).toISOString().slice(0, 10) }
+    });
+    const session = await FactorAnalytics.create(7, { information: new ArrayBuffer(0), groups: new ArrayBuffer(0) }, input);
+    return { session, raw, queries, close() { connection.close(); db.reset(); } };
+  } catch (reason) { connection.close(); db.reset(); throw reason; }
+}
+
+function effectiveValues(values, periods) {
+  return values.map((_value, index) => {
+    const window = values.slice(Math.max(0, index - periods + 1), index + 1);
+    return window.includes(null) ? null : window.reduce((sum, value) => sum + value, 0) / window.length;
   });
 }
+function cumulativeValues(values, reverse = false, nav = false) {
+  let sum = 0;
+  const result = values.map(() => null);
+  const indices = values.map((_value, index) => index);
+  if (reverse) indices.reverse();
+  for (const index of indices) if (values[index] !== null) {
+    sum += values[index];
+    result[index] = nav ? Math.exp(sum) : sum;
+  }
+  return result;
+}
+function close(actual, expected) {
+  if (expected === null) assert.equal(actual, null);
+  else assert.ok(typeof actual === "number" && Math.abs(actual - expected) < 1e-12, `${actual} != ${expected}`);
+}
+function closeValues(actual, expected) {
+  assert.equal(actual.length, expected.length);
+  actual.forEach((value, index) => close(value, expected[index]));
+}
+function checkGroupStatistics(statistics, effective) {
+  const studentTCdf = require("@stdlib/stats-base-dists-t-cdf");
+  for (const [group, label] of groupLabels.entries()) {
+    const row = statistics.find((row) => row.group === label);
+    const values = effective[group].filter((value) => value !== null);
+    const mean = values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+    close(row.mean, mean);
+    if (values.length < 3) assert.equal(row.pValue, null);
+    else {
+      const deviation = Math.sqrt(values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (values.length - 1));
+      const statistic = deviation > 0 ? Math.abs(mean / (deviation / Math.sqrt(values.length))) : null;
+      close(row.pValue, statistic === null ? null : 2 * (1 - studentTCdf(statistic, values.length - 1)));
+    }
+  }
+}
+
+for (const period of [1, 2, 5]) {
+  test(`DuckDB P${period} log returns use expanding trading-row windows, strict NULLs and the same forward/reverse effective series`, async () => {
+    const input = priceParameters(period);
+    const fixture = await duckDbFixture(input);
+    try {
+      for (const factor of input.factor_columns) for (const column of input.return_columns) {
+        const raw = fixture.raw[`${factor}_${column}`];
+        const spread = raw.map((row) => row[0] === null || row[3] === null ? null : row[3] - row[0]);
+        const effective = effectiveValues(spread, period);
+        const longShort = await fixture.session.longShortSeries(factor, column);
+        assert.deepEqual(Array.from(longShort, (row) => row.time), tradingDates, "full trading calendar includes all-NULL dates without weekend rows");
+        closeValues(Array.from(longShort, (row) => row.value), effective);
+        closeValues(Array.from(longShort, (row) => row.cumulative), cumulativeValues(effective));
+        assert.ok(longShort.some((row) => row.value < 0), "negative log spreads are not exponentiated or clipped");
+        assert.equal(longShort[6].value, null);
+        for (let index = 6; index < 6 + period; index++) assert.equal(longShort[index].value, null, "one NULL invalidates every window containing its trading row");
+        const groups = await fixture.session.groupSeries(factor, column, input.n_groups);
+        assert.deepEqual(Array.from(groups, (row) => row.time), tradingDates);
+        const groupEffective = groupLabels.map((_label, group) => effectiveValues(raw.map((row) => row[group]), period));
+        for (const [group, label] of groupLabels.entries()) {
+          closeValues(Array.from(groups, (row) => row.values[label]), cumulativeValues(groupEffective[group], false, true));
+          closeValues(Array.from(groups, (row) => row.reverseValues[label]), cumulativeValues(groupEffective[group], true, true));
+          assert.equal(groups.at(-1).values[label], null, "trailing NULL is a gap, not a repeated NAV");
+          if (input.return_specs[column].lag === 3 && group === 1) {
+            for (let index = 0; index < period; index++) assert.equal(groups[index].values[label], null, "leading NULLs cannot be compressed out of the window");
+          }
+        }
+        checkGroupStatistics(await fixture.session.groupStatistics(factor, column, input.n_groups), groupEffective);
+      }
+      const first = await fixture.session.longShortSeries("factor_a", `P${period}L1`);
+      close(first[0].value, 0.06);
+      close(first[1].value, period === 1 ? -0.05 : 0.005);
+      if (period === 5) {
+        close(first[2].value, 0.02 / 3);
+        close(first[5].value, -0.02 / 5);
+      }
+      assert.notEqual(first[0].value, (await fixture.session.longShortSeries("factor_a", `P${period}L3`))[0].value, "selected lags never average together");
+    } finally { fixture.close(); }
+  });
+
+  test(`DuckDB P${period} date selection preserves full-report window context and only resets cumulative origins`, async () => {
+    const input = priceParameters(period, 1);
+    const fixture = await duckDbFixture(input);
+    try {
+      const factor = input.factor_columns[0], column = input.return_columns[0];
+      const raw = fixture.raw[`${factor}_${column}`];
+      const effective = effectiveValues(raw.map((row) => row[3] === null || row[0] === null ? null : row[3] - row[0]), period);
+      const full = await fixture.session.longShortSeries(factor, column);
+      const fullGroups = await fixture.session.groupSeries(factor, column, input.n_groups);
+      for (const [start, end] of [[1, 5], [5, 8], [8, 17], [13, 17], [18, 19], [0, 1]]) {
+        const range = { start: tradingDates[start], end: tradingDates[end] };
+        const rows = await fixture.session.longShortSeries(factor, column, range);
+        assert.deepEqual(Array.from(rows, (row) => row.time), tradingDates.slice(start, end + 1));
+        closeValues(Array.from(rows, (row) => row.value), Array.from(full.slice(start, end + 1), (row) => row.value));
+        closeValues(Array.from(rows, (row) => row.cumulative), cumulativeValues(effective.slice(start, end + 1)));
+        const groups = await fixture.session.groupSeries(factor, column, input.n_groups, range);
+        const groupEffective = groupLabels.map((_label, group) => effectiveValues(raw.map((row) => row[group]), period).slice(start, end + 1));
+        for (const [group, label] of groupLabels.entries()) {
+          closeValues(Array.from(groups, (row) => row.values[label]), cumulativeValues(groupEffective[group], false, true));
+          closeValues(Array.from(groups, (row) => row.reverseValues[label]), cumulativeValues(groupEffective[group], true, true));
+          for (let index = start; index <= end; index++) if (fullGroups[index].values[label] === null) assert.equal(groups[index - start].values[label], null);
+        }
+        checkGroupStatistics(await fixture.session.groupStatistics(factor, column, input.n_groups, range), groupEffective);
+      }
+      const empty = { start: "2026-02-01", end: "2026-02-02" };
+      assert.equal((await fixture.session.longShortSeries(factor, column, empty)).length, 0);
+      assert.equal((await fixture.session.groupSeries(factor, column, input.n_groups, empty)).length, 0);
+      checkGroupStatistics(await fixture.session.groupStatistics(factor, column, input.n_groups, empty), groupLabels.map(() => []));
+    } finally { fixture.close(); }
+  });
+}
+
+test("DuckDB simple metadata normalizes each source with ln(1+source) before the same P2 spread/window/statistics flow", async () => {
+  const input = { factor_columns: ["factor_a"], return_columns: ["custom_99"], return_specs: { custom_99: { kind: "simple", periods: 2 } }, n_groups: 2, n_select: 10 };
+  const fixture = await duckDbFixture(input);
+  try {
+    const raw = fixture.raw.factor_a_custom_99;
+    const effective = effectiveValues(raw.map((row) => row[0] === null || row[3] === null ? null : row[3] - row[0]), 2);
+    const rows = await fixture.session.longShortSeries("factor_a", "custom_99");
+    closeValues(Array.from(rows, (row) => row.value), effective);
+    closeValues(Array.from(rows, (row) => row.cumulative), cumulativeValues(effective));
+    const groups = await fixture.session.groupSeries("factor_a", "custom_99", 2);
+    const groupEffective = groupLabels.map((_label, group) => effectiveValues(raw.map((row) => row[group]), 2));
+    for (const [group, label] of groupLabels.entries()) {
+      closeValues(Array.from(groups, (row) => row.values[label]), cumulativeValues(groupEffective[group], false, true));
+      closeValues(Array.from(groups, (row) => row.reverseValues[label]), cumulativeValues(groupEffective[group], true, true));
+    }
+    checkGroupStatistics(await fixture.session.groupStatistics("factor_a", "custom_99", 2), groupEffective);
+  } finally { fixture.close(); }
+});
 
 test("turnover comparison intervals come only from their own Parquet and remain independent of return selection", async () => {
   const { session, queries } = await analyticsFixture();
@@ -188,19 +315,20 @@ const panel = load("../src/components/panel/FactorAnalysisReport.tsx", {
   "@/store": {},
   "~icons/lucide/database": { __esModule: true, default: "IconDatabase" },
   "~icons/lucide/loader-circle": { __esModule: true, default: "IconLoaderCircle" }
-}, "\nexport { LaggedReturnNotice, ReturnContract, OverlappingReturnNotice, returnMetrics, maxDrawdown, longShortOption, returnPeriodsOf, informationMetrics, informationOption, decaySummary, decayOption, ReportSelect };");
+}, "\nexport { LaggedReturnNotice, ReturnContract, returnMetrics, maxDrawdown, longShortOption, groupChartPoints, informationMetrics, informationOption, decaySummary, decayOption, ReportSelect };");
 function text(Component, props) {
   return renderToStaticMarkup(React.createElement(Component, props)).replace(/<[^>]+>/g, "");
 }
 
-test("N=2 report notice explains four simple segments over three trading days without changing the annual model", () => {
+test("N=2 report notice explains four log segments over three trading days without changing the annual model", () => {
   const notice = text(panel.LaggedReturnNotice, { specs: parameters(2).return_specs });
-  assert.match(notice, /N=2.*t 至 t\+2.*3 个交易日（N\+1）.*4 个单段简单收益/);
+  assert.match(notice, /N=2.*t 至 t\+2.*3 个交易日（N\+1）.*4 个单段对数收益/);
   assert.match(notice, /r\{k-1\}o 为隔夜 C_adj\(t\+k-1\) → O_adj\(t\+k\)/);
   assert.match(notice, /r\{k\} 为日内 O_adj\(t\+k\) → C_adj\(t\+k\)/);
-  assert.match(notice, /终价 \/ 初价 − 1/);
+  assert.match(notice, /ln\(终价 \/ 初价\)/);
   assert.match(notice, /periods=1.*每个交易日一条观测.*252 个交易日/);
   assert.match(notice, /换手比较间隔独立于收益时段/);
+  assert.doesNotMatch(notice, /简单收益|不可复利|重叠/);
   assert.equal(text(panel.LaggedReturnNotice, { specs: { return_2: { kind: "simple", periods: 2 } } }), "");
 });
 
@@ -212,14 +340,12 @@ test("selected new return specs display the exact adjusted overnight and intrada
   ]) {
     const contract = text(panel.ReturnContract, { spec: specs[column] });
     assert.ok(contract.includes(interval));
-    assert.match(contract, /简单收益.*1 期.*可复利/);
-    assert.equal(text(panel.OverlappingReturnNotice, { periods: specs[column].periods }), "");
-    assert.equal(panel.returnPeriodsOf(parameters(2), column), 1);
+    assert.match(contract, /对数收益.*1 期/);
+    assert.doesNotMatch(contract, /简单收益|可复利|重叠/);
   }
   const legacy = text(panel.ReturnContract, { spec: { kind: "simple", periods: 2 } });
-  assert.match(legacy, /简单收益2 期重叠 · 不可复利/);
-  assert.doesNotMatch(legacy, /隔夜|日内|C_adj|O_adj/);
-  assert.match(text(panel.OverlappingReturnNotice, { periods: 2 }), /相邻观测存在重叠/);
+  assert.match(legacy, /对数收益2 期/);
+  assert.doesNotMatch(legacy, /隔夜|日内|C_adj|O_adj|简单收益|可复利|重叠/);
 });
 
 test("new price contracts explain exact entry and exit trading days without the historical segment notice", () => {
@@ -230,8 +356,8 @@ test("new price contracts explain exact entry and exit trading days without the 
       const contract = text(panel.ReturnContract, { spec: specs[`P5L${lag}`] });
       assert.ok(contract.includes(`${label} t+${lag} → t+${lag + 5}`));
       assert.ok(contract.includes(`入场滞后 ${lag} 个交易日`));
-      assert.match(contract, /跨度 5 个交易日.*重叠 · 不可复利/);
-      assert.doesNotMatch(contract, /隔夜|日内|N=/);
+      assert.match(contract, /对数收益.*跨度 5 个交易日/);
+      assert.doesNotMatch(contract, /隔夜|日内|N=|重叠|可复利|不能连续复利/);
     }
   }
 });
@@ -328,8 +454,8 @@ function syntheticReport(input = priceParameters()) {
         const value = parameters.factor_columns.indexOf(factor) + parameters.return_columns.indexOf(column) / 10;
         return pickDates(range).map((time, index) => ({ time, ic: index === 1 ? null : value + 0.1, rankIc: index === 1 ? null : value + 0.3, icCumulative: index === 1 ? null : value + 0.2, rankIcCumulative: index === 1 ? null : value + 0.6 }));
       },
-      async longShortSeries(factor, column, range) { check("returns", factor, column, range); return pickDates(range).map((time) => ({ time, value: 0.01, cumulative: parameters.return_specs[column].periods === 1 ? 0.01 : null })); },
-      async groupSeries(factor, column, _groups, range) { check("groups", factor, column, range); return pickDates(range).map((time) => ({ time, values: { "Group 1": 1.01 }, reverseValues: { "Group 1": 1.01 } })); },
+      async longShortSeries(factor, column, range) { check("returns", factor, column, range); return pickDates(range).map((time, index) => ({ time, value: 0.01, cumulative: 0.01 * (index + 1) })); },
+      async groupSeries(factor, column, _groups, range) { check("groups", factor, column, range); const selected = pickDates(range); return selected.map((time, index) => ({ time, values: { "Group 1": Math.exp(0.01 * (index + 1)) }, reverseValues: { "Group 1": Math.exp(0.01 * (selected.length - index)) } })); },
       async groupStatistics(factor, column, _groups, range) { check("groupStatistics", factor, column, range); return [{ group: "Group 1", mean: 0.01, pValue: null }]; },
       async decay(factor, columns, range) { check("decay", factor, undefined, range); return columns.map((returnColumn, position) => ({ returnColumn, label: returnColumn, position, icMean: [0.6, 0.3, null][position] ?? null, rankIcMean: [0.1, 0.4, null][position] ?? null })); },
       async turnoverPeriods(factor) { check("periods", factor); return [1, 2, 5, 7]; },
@@ -375,7 +501,7 @@ test("three report selectors sit under dates, use accessible Radix selects, and 
     assert.equal(fixture.created.length, 1);
     assert.equal(fixture.downloads.length, 4, "dimension changes reuse the session and downloaded Parquet");
     assert.equal(calls.filter((call) => call.name === "execution").length, executionCount, "DSL statistics only depend on dates");
-    for (const name of ["information", "returns", "groupStatistics"]) {
+    for (const name of ["information", "returns", "groups", "groupStatistics"]) {
       const call = calls.filter((call) => call.name === name).at(-1);
       assert.equal(call.factor, "factor_b"); assert.equal(call.column, "P5L3");
       assert.equal(call.range.start, "2026-01-06"); assert.equal(call.range.end, "2026-01-07");
@@ -391,9 +517,82 @@ test("three report selectors sit under dates, use accessible Radix selects, and 
     assert.deepEqual(Array.from(decay.series[0].data, (point) => point.value), [0.6, 0.3, null]);
     assert.deepEqual(Array.from(decay.series[0].data, (point) => point.itemStyle.opacity), [0.4, 0.4, 1]);
     assert.equal(reportElements(app.card("decay"), "SummaryTiles")[0].props.items[0].value, "P5L1");
-    assert.equal(reportElements(app.card("groups"), "NonCompoundableChartState").length, 1);
-    assert.equal(reportElements(app.card("returns"), "EChart")[0].props.option.series.length, 1);
+    assert.equal(reportElements(app.card("groups"), "EChart").length, 2);
+    assert.equal(reportElements(app.card("returns"), "EChart")[0].props.option.series.length, 2);
+    assert.equal(reportElements(app.card("returns"), "EChart")[0].props.option.series[1].name, "累计对数收益");
+    const metrics = reportElements(app.card("returns"), "MetricGrid")[0].props.items;
+    assert.equal(metrics.length, 7);
+    assert.equal(metrics.find((metric) => metric.label === "多空累计对数收益").value, "2.00%");
+    assert.equal(metrics.find((metric) => metric.label === "多空年化对数收益").value, "252.00%");
+    const groupQueries = calls.filter((call) => call.name === "groups").length;
+    const tabs = reportElements(app.card("groups"), "TabsTrigger");
+    assert.equal(tabs.length, 2);
+    assert.ok(tabs.every((tab) => tab.props.disabled !== true), "P5 forward/reverse tabs remain enabled");
+    reportElements(app.card("groups"), "Tabs")[0].props.onValueChange("reverse"); await app.settle();
+    const reverse = reportElements(app.card("groups"), "EChart")[0].props.option;
+    assert.deepEqual(Array.from(reverse.xAxis.data), ["2026-01-07（起点）", "2026-01-07", "2026-01-06"]);
+    closeValues(Array.from(reverse.series[0].data), [1, Math.exp(0.01), Math.exp(0.02)]);
+    assert.equal(calls.filter((call) => call.name === "groups").length, groupQueries, "reverse reorders the same effective results rather than querying a reverse window");
+    const source = readFileSync(new URL("../src/components/panel/FactorAnalysisReport.tsx", import.meta.url), "utf8");
+    assert.doesNotMatch(source, /重叠|不可复利|不能连续复利|净值曲线不生成|compoundable|OverlappingReturnNotice|NonCompoundableChartState/);
   } finally { app.close(); }
+});
+
+test("P5 component hooks render DuckDB effective log metrics and NAVs through dates, lag/factor selects and reverse tabs", async () => {
+  const input = priceParameters(5);
+  const fixture = await duckDbFixture(input);
+  const downloads = [];
+  const api = {
+    async outputs() { return ["information_coefficient", "group_returns"].map((name) => ({ name })); },
+    async output(_id, name) { downloads.push(name); return new ArrayBuffer(0); }
+  };
+  const app = reportFixture("../src/components/panel/FactorAnalysisReport.tsx", {
+    "@/assets/lib/reports": { useReportApi: () => api },
+    "@/assets/lib/factorAnalysis": { FactorAnalytics: { create: async () => fixture.session } }
+  }, { parameters: input, workflowInstanceId: 7 });
+  const choose = (label, value) => app.nodes("ReportSelect").find((node) => node.props.label === label).props.onChange(value);
+  function verify(factor, column, start, end, reverse = false) {
+    const raw = fixture.raw[`${factor}_${column}`];
+    const values = effectiveValues(raw.map((row) => row[0] === null || row[3] === null ? null : row[3] - row[0]), 5).slice(start, end + 1);
+    const cumulative = cumulativeValues(values);
+    const option = reportElements(app.card("returns"), "EChart")[0].props.option;
+    closeValues(Array.from(option.series[0].data), values);
+    closeValues(Array.from(option.series[1].data), cumulative);
+    assert.equal(option.series[1].name, "累计对数收益");
+    const expectedRows = values.map((value, index) => ({ time: tradingDates[start + index], value, cumulative: cumulative[index] }));
+    assert.deepEqual(Array.from(reportElements(app.card("returns"), "MetricGrid")[0].props.items, (metric) => [metric.label, metric.value]), Array.from(panel.returnMetrics(expectedRows), (metric) => [metric.label, metric.value]));
+    const groupCharts = reportElements(app.card("groups"), "EChart");
+    assert.equal(groupCharts.length, 2);
+    const nav = groupCharts[0].props.option;
+    for (const [group, label] of groupLabels.entries()) {
+      const effective = effectiveValues(raw.map((row) => row[group]), 5).slice(start, end + 1);
+      const cumulative = cumulativeValues(effective, reverse, true);
+      const expected = reverse ? [1, ...cumulative.reverse()] : cumulative;
+      closeValues(Array.from(nav.series.find((series) => series.name === label).data), expected);
+      const valid = effective.filter((value) => value !== null);
+      close(groupCharts[1].props.option.series[0].data[group], valid.length ? valid.reduce((sum, value) => sum + value, 0) / valid.length : null);
+    }
+    assert.equal(app.nodes("ReportSelect").length, 3);
+    assert.ok(reportElements(app.card("groups"), "TabsTrigger").every((tab) => tab.props.disabled !== true));
+  }
+  try {
+    await app.settle();
+    verify("factor_a", "P5L1", 0, 19);
+    const fullValues = Array.from(reportElements(app.card("returns"), "EChart")[0].props.option.series[0].data);
+    app.nodes("DateRangeBar")[0].props.onRangeChange(tradingDates[8], tradingDates[17]); await app.settle();
+    verify("factor_a", "P5L1", 8, 17);
+    assert.deepEqual(Array.from(reportElements(app.card("returns"), "EChart")[0].props.option.series[0].data), fullValues.slice(8, 18), "date zoom does not change effective values or NULL windows");
+    choose("收益率", "P5L3"); await app.settle(); verify("factor_a", "P5L3", 8, 17);
+    choose("因子", "factor_b"); await app.settle(); verify("factor_b", "P5L3", 8, 17);
+    choose("IC 类型", "IC"); await app.settle(); verify("factor_b", "P5L3", 8, 17);
+    const queryCount = fixture.queries.length;
+    reportElements(app.card("groups"), "Tabs")[0].props.onValueChange("reverse"); await app.settle();
+    verify("factor_b", "P5L3", 8, 17, true);
+    assert.equal(fixture.queries.length, queryCount, "reverse never re-windows or refetches raw returns");
+    app.nodes("DateRangeBar")[0].props.onReset(); await app.settle();
+    verify("factor_b", "P5L3", 0, 19, true);
+    assert.deepEqual(downloads, ["information_coefficient", "group_returns"]);
+  } finally { app.close(); fixture.close(); }
 });
 
 test("a new report scope resets selectors and dates before querying, while same-value polling preserves them", async () => {
@@ -691,25 +890,22 @@ test("backtest tab changes keep the loaded portfolio and selected range without 
   } finally { app.close(); }
 });
 
-test("daily return metric formulas stay unchanged for new labels including later lags", () => {
-  const rows = [{ time: "2026-01-05", value: 0.01, cumulative: 0.01 }, { time: "2026-01-06", value: -0.005, cumulative: 0.00495 }];
-  const expected = panel.returnMetrics(rows, 1);
-  for (const spec of Object.values(parameters().return_specs)) {
-    assert.deepEqual(panel.returnMetrics(rows, spec.periods), expected);
-  }
-  const annualReturn = (1.00495 ** (252 / 2) - 1);
+test("effective log summaries keep log sums, arithmetic annualization and existing population/sample DDOF conventions", () => {
+  const rows = longShortRows([0.01, -0.005]);
+  const metrics = panel.returnMetrics(rows);
+  const annualReturn = 0.005 * 252 / 2;
   const annualVolatility = 0.0075 * Math.sqrt(252);
-  assert.equal(expected.find((metric) => metric.label === "多空年化收益").value, `${(annualReturn * 100).toFixed(2)}%`);
-  assert.equal(expected.find((metric) => metric.label === "多空年化 Sharpe").value, (annualReturn / annualVolatility).toFixed(4));
-  assert.equal(panel.returnMetrics(rows, 2).find((metric) => metric.label === "多空年化收益").value, "—");
+  assert.equal(metrics.find((metric) => metric.label === "多空累计对数收益").value, "0.50%");
+  assert.equal(metrics.find((metric) => metric.label === "多空年化对数收益").value, `${(annualReturn * 100).toFixed(2)}%`);
+  assert.equal(metrics.find((metric) => metric.label === "多空年化对数波动").value, `${(annualVolatility * 100).toFixed(2)}%`);
+  assert.equal(metrics.find((metric) => metric.label === "多空年化 Sharpe").value, (annualReturn / annualVolatility).toFixed(4));
+  assert.equal(metrics.find((metric) => metric.label === "多空单期对数收益均值").value, "0.25%");
+  assert.equal(metrics.find((metric) => metric.label === "多空单期对数收益标准差").value, `${(Math.SQRT2 * 0.0075 * 100).toFixed(2)}%`);
 });
 
 function longShortRows(values) {
-  let netValue = 1;
-  return values.map((value, index) => {
-    if (value !== null) netValue *= 1 + value;
-    return { time: `2026-01-${String(index + 5).padStart(2, "0")}`, value, cumulative: value === null ? null : netValue - 1 };
-  });
+  const cumulative = cumulativeValues(values);
+  return values.map((value, index) => ({ time: `2026-01-${String(index + 5).padStart(2, "0")}`, value, cumulative: cumulative[index] }));
 }
 
 for (const [gap, values] of [
@@ -719,16 +915,17 @@ for (const [gap, values] of [
   ["multiple trailing", [0.1, 0.1, null, null]],
   ["combined", [null, 0.1, null, 0.1, null]]
 ]) {
-  test(`single-period summaries skip ${gap} NULLs without filling curve gaps`, () => {
+  test(`log summaries skip ${gap} NULLs without filling curve gaps or changing observation counts`, () => {
     const rows = longShortRows(values);
     const cumulative = rows.map((row) => row.cumulative);
-    const metrics = panel.returnMetrics(rows, 1);
-    assert.deepEqual(metrics, panel.returnMetrics(longShortRows([0.1, 0.1]), 1));
-    assert.equal(metrics.find((metric) => metric.label === "多空累计收益").value, "21.00%");
-    assert.equal(metrics.find((metric) => metric.label === "多空年化收益").value, `${(((1.1 * 1.1) ** (252 / 2) - 1) * 100).toFixed(2)}%`);
+    const metrics = panel.returnMetrics(rows);
+    assert.deepEqual(metrics, panel.returnMetrics(longShortRows([0.1, 0.1])));
+    assert.equal(metrics.find((metric) => metric.label === "多空累计对数收益").value, "20.00%");
+    assert.equal(metrics.find((metric) => metric.label === "多空年化对数收益").value, "2520.00%");
     assert.equal(metrics.find((metric) => metric.label === "多空最大回撤").value, "0.00%");
     assert.equal(panel.maxDrawdown(rows), 0);
-    const option = panel.longShortOption(rows, "light", true);
+    const option = panel.longShortOption(rows, "light");
+    assert.equal(option.series[1].name, "累计对数收益");
     assert.deepEqual(Array.from(option.series[0].data), values);
     assert.deepEqual(Array.from(option.series[1].data), cumulative);
   });
@@ -738,49 +935,62 @@ for (const [name, values] of [["empty", []], ["all NULL", [null, null]]]) {
   test(`${name} return data has no summary metrics or drawdown`, () => {
     const rows = longShortRows(values);
     assert.equal(panel.maxDrawdown(rows), null);
-    assert.ok(panel.returnMetrics(rows, 1).every((metric) => metric.value === "—"));
-    const option = panel.longShortOption(rows, "light", true);
+    assert.ok(panel.returnMetrics(rows).every((metric) => metric.value === "—"));
+    const option = panel.longShortOption(rows, "light");
+    assert.equal(option.series.length, 2);
     assert.deepEqual(Array.from(option.series[0].data), values);
     assert.deepEqual(Array.from(option.series[1].data), values);
   });
 }
 
-test("nonconstant returns retain annualized Sharpe and real drawdowns across NULL gaps", () => {
-  const expected = panel.returnMetrics(longShortRows([0.01, -0.005]), 1);
-  const annualReturn = (1.01 * 0.995) ** (252 / 2) - 1;
+test("nonconstant log returns retain annualized Sharpe and exponential NAV drawdowns across NULL gaps", () => {
+  const expected = panel.returnMetrics(longShortRows([0.01, -0.005]));
+  const annualReturn = 0.005 * 252 / 2;
   const annualVolatility = 0.0075 * Math.sqrt(252);
   const sharpe = (annualReturn / annualVolatility).toFixed(4);
   assert.notEqual(sharpe, "—");
   for (const values of [[null, 0.01, -0.005], [0.01, null, -0.005], [0.01, -0.005, null], [null, 0.01, null, -0.005, null, null]]) {
     const rows = longShortRows(values);
-    const metrics = panel.returnMetrics(rows, 1);
+    const metrics = panel.returnMetrics(rows);
     assert.equal(metrics.find((metric) => metric.label === "多空年化 Sharpe").value, sharpe);
     assert.deepEqual(metrics, expected);
-    assert.ok(Math.abs(panel.maxDrawdown(rows) - 0.005) < 1e-12);
+    close(panel.maxDrawdown(rows), 1 - Math.exp(-0.005));
   }
-  assert.ok(Math.abs(panel.maxDrawdown(longShortRows([null, -0.1, null, 0.1, null])) - 0.1) < 1e-12, "drawdown still starts from the initial net value of one");
+  close(panel.maxDrawdown(longShortRows([null, -0.1, null, 0.1, null])), 1 - Math.exp(-0.1));
+  const negative = panel.returnMetrics(longShortRows([-1.2, null, 0.1]));
+  assert.equal(negative.find((metric) => metric.label === "多空累计对数收益").value, "-110.00%", "log cumulative values below -1 remain valid");
+  assert.equal(negative.find((metric) => metric.label === "多空年化对数收益").value, "-13860.00%");
+  close(panel.maxDrawdown(longShortRows([-1.2, null, 0.1])), 1 - Math.exp(-1.2));
 });
 
-test("zero cumulative return is a valid observation before trailing NULLs", () => {
+test("zero cumulative log return is a valid observation before trailing NULLs", () => {
   const rows = longShortRows([0, null]);
-  const metrics = panel.returnMetrics(rows, 1);
-  assert.equal(metrics.find((metric) => metric.label === "多空累计收益").value, "0.00%");
-  assert.equal(metrics.find((metric) => metric.label === "多空年化收益").value, "0.00%");
+  const metrics = panel.returnMetrics(rows);
+  assert.equal(metrics.find((metric) => metric.label === "多空累计对数收益").value, "0.00%");
+  assert.equal(metrics.find((metric) => metric.label === "多空年化对数收益").value, "0.00%");
   assert.equal(panel.maxDrawdown(rows), 0);
 });
 
 for (const periods of [2, 5]) {
-  test(`${periods}-period overlapping returns remain noncompoundable with NULL gaps`, () => {
-    const values = [null, 0.01, null, -0.005, null];
+  test(`P${periods} effective values drive complete log metrics and both series without an extra period divisor`, () => {
+    const values = effectiveValues([0.08, -0.04, 0.02, 0.06, -0.03, null, 0.01, -0.02, 0.04, 0.03, 0.02], periods);
     const rows = longShortRows(values);
-    const metrics = panel.returnMetrics(rows, periods);
-    for (const label of ["多空累计收益", "多空年化收益", "多空年化 Sharpe", "多空最大回撤", "多空年化波动"]) {
-      assert.equal(metrics.find((metric) => metric.label === label).value, "—");
-    }
-    assert.equal(metrics.find((metric) => metric.label === "多空单期收益均值").value, "0.25%");
-    assert.equal(metrics.find((metric) => metric.label === "多空单期收益标准差").value, "1.06%");
-    const option = panel.longShortOption(rows, "light", false);
-    assert.equal(option.series.length, 1);
+    const metrics = panel.returnMetrics(rows);
+    assert.ok(metrics.every((metric) => metric.value !== "—"));
+    const valid = values.filter((value) => value !== null);
+    const cumulative = valid.reduce((sum, value) => sum + value, 0);
+    const mean = cumulative / valid.length;
+    const variance = valid.reduce((sum, value) => sum + (value - mean) ** 2, 0);
+    assert.equal(metrics.find((metric) => metric.label === "多空累计对数收益").value, `${(cumulative * 100).toFixed(2)}%`);
+    assert.equal(metrics.find((metric) => metric.label === "多空年化对数收益").value, `${(mean * 252 * 100).toFixed(2)}%`);
+    assert.equal(metrics.find((metric) => metric.label === "多空单期对数收益均值").value, `${(mean * 100).toFixed(2)}%`);
+    assert.equal(metrics.find((metric) => metric.label === "多空单期对数收益标准差").value, `${(Math.sqrt(variance / (valid.length - 1)) * 100).toFixed(2)}%`);
+    assert.equal(metrics.find((metric) => metric.label === "多空年化对数波动").value, `${(Math.sqrt(variance / valid.length) * Math.sqrt(252) * 100).toFixed(2)}%`);
+    const option = panel.longShortOption(rows, "light", { primary: { min: -0.1, max: 0.1 }, secondary: { min: -0.3, max: 0.5 } });
+    assert.equal(option.series.length, 2);
+    assert.equal(option.yAxis.length, 2);
+    assert.equal(option.yAxis[0].min, -0.1); assert.equal(option.yAxis[1].max, 0.5);
     assert.deepEqual(Array.from(option.series[0].data), values);
+    assert.deepEqual(Array.from(option.series[1].data), rows.map((row) => row.cumulative));
   });
 }

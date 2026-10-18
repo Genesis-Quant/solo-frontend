@@ -67,43 +67,34 @@ export class FactorAnalytics {
     const [lowColumn, highColumn] = endpointColumnNames(factor, returnColumn);
     const low = identifier(lowColumn);
     const high = identifier(highColumn);
-    const spec = this.returnSpec(returnColumn);
-    const realized = spec.kind === "log" ? "exp(raw_value) - 1" : "raw_value";
-    const cumulative = spec.periods !== 1
-      ? "NULL::DOUBLE"
-      : `CASE WHEN raw_value IS NULL THEN NULL ELSE ${spec.kind === "log"
-        ? "exp(sum(raw_value) OVER (ORDER BY time ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)) - 1"
-        : "product(1 + raw_value) OVER (ORDER BY time ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) - 1"} END`;
     const rows = await this.rows(`
-      WITH daily AS (
-        SELECT time, ${high} - ${low} AS raw_value
-        FROM read_parquet(${literal(this.groupsFile)})
-        ${dateFilter(range)}
+      ${this.effectiveReturns(returnColumn, [high, low], true)},
+      selected AS (
+        SELECT time, value_0 AS value FROM effective_returns ${dateFilter(range)}
       )
-      SELECT time, ${realized} AS value,
-        ${cumulative} AS cumulative
-      FROM daily
+      SELECT time, value,
+        CASE WHEN value IS NULL THEN NULL ELSE sum(value) OVER (ORDER BY time ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) END AS cumulative
+      FROM selected
       ORDER BY time
     `);
     return rows.map((row) => ({ time: duckDbDateValue(row.time), value: numberValue(row.value), cumulative: numberValue(row.cumulative) }));
   }
 
   async groupSeries(factor: string, returnColumn: string, nGroups: number, range?: FactorDateRange): Promise<GroupPoint[]> {
-    const spec = this.returnSpec(returnColumn);
     const definitions = groupDefinitions(factor, returnColumn, nGroups, this.parameters.n_select);
-    const columns = definitions.flatMap((definition, index) => {
-      const source = identifier(definition.column);
+    const columns = definitions.flatMap((_definition, index) => {
+      const source = `value_${index}`;
       return ["ASC", "DESC"].map((direction) => {
         const window = `ORDER BY time ${direction} ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`;
-        const cumulative = spec.periods !== 1
-          ? "NULL::DOUBLE"
-          : `CASE WHEN ${source} IS NULL THEN NULL ELSE ${spec.kind === "log"
-            ? `exp(sum(${source}) OVER (${window}))`
-            : `product(1 + ${source}) OVER (${window})`} END`;
+        const cumulative = `CASE WHEN ${source} IS NULL THEN NULL ELSE exp(sum(${source}) OVER (${window})) END`;
         return `${cumulative} AS ${identifier(`${direction === "DESC" ? "reverse_" : ""}series_${index}`)}`;
       });
     });
-    const rows = await this.rows(`SELECT time, ${columns.join(", ")} FROM read_parquet(${literal(this.groupsFile)}) ${dateFilter(range)} ORDER BY time`);
+    const rows = await this.rows(`
+      ${this.effectiveReturns(returnColumn, definitions.map((definition) => identifier(definition.column)))},
+      selected AS (SELECT * FROM effective_returns ${dateFilter(range)})
+      SELECT time, ${columns.join(", ")} FROM selected ORDER BY time
+    `);
     return rows.map((row) => ({
       time: duckDbDateValue(row.time),
       values: Object.fromEntries(definitions.map((definition, index) => [definition.label, numberValue(row[`series_${index}`])])),
@@ -112,14 +103,16 @@ export class FactorAnalytics {
   }
 
   async groupStatistics(factor: string, returnColumn: string, nGroups: number, range?: FactorDateRange): Promise<GroupStatistic[]> {
-    const spec = this.returnSpec(returnColumn);
     const definitions = groupDefinitions(factor, returnColumn, nGroups, this.parameters.n_select);
-    const statements = definitions.map((definition) => {
-      const source = identifier(definition.column);
-      const realized = spec.kind === "log" ? `exp(${source}) - 1` : source;
-      return `SELECT ${literal(definition.label)} AS group_name, count(${source}) AS observations, avg(${realized}) AS mean, stddev_samp(${realized}) AS std FROM read_parquet(${literal(this.groupsFile)}) ${dateFilter(range)}`;
+    const statements = definitions.map((definition, index) => {
+      const source = `value_${index}`;
+      return `SELECT ${literal(definition.label)} AS group_name, count(${source}) AS observations, avg(${source}) AS mean, stddev_samp(${source}) AS std FROM selected`;
     });
-    const rows = await this.rows(statements.join(" UNION ALL "));
+    const rows = await this.rows(`
+      ${this.effectiveReturns(returnColumn, definitions.map((definition) => identifier(definition.column)))},
+      selected AS (SELECT * FROM effective_returns ${dateFilter(range)})
+      ${statements.join(" UNION ALL ")}
+    `);
     return rows.map((row) => {
       const observations = integerValue(row.observations);
       const mean = numberValue(row.mean);
@@ -204,8 +197,20 @@ export class FactorAnalytics {
     return this.database.rows(sql);
   }
 
-  private returnSpec(returnColumn: string) {
-    return this.parameters.return_specs[returnColumn];
+  private effectiveReturns(returnColumn: string, sources: string[], spread = false) {
+    const spec = this.parameters.return_specs[returnColumn];
+    const normalized = sources.map((source) => spec.kind === "simple" ? `ln(1 + ${source})` : source);
+    const raw = spread ? [`${normalized[0]} - ${normalized[1]}`] : normalized;
+    const window = `ORDER BY time ROWS BETWEEN ${spec.periods - 1} PRECEDING AND CURRENT ROW`;
+    // The backend supplies every trading row. Keep NULLs in each expanding / P-row
+    // window and compute it before date selection; never re-window reversed curves.
+    return `WITH raw_returns AS (
+      SELECT time, ${raw.map((source, index) => `${source} AS raw_${index}`).join(", ")}
+      FROM read_parquet(${literal(this.groupsFile)})
+    ), effective_returns AS (
+      SELECT time, ${raw.map((_source, index) => `CASE WHEN count(raw_${index}) OVER (${window}) = count(*) OVER (${window}) THEN avg(raw_${index}) OVER (${window}) ELSE NULL END AS value_${index}`).join(", ")}
+      FROM raw_returns
+    )`;
   }
 }
 

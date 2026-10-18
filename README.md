@@ -21,7 +21,7 @@ npm run build
 
 因子报告在日期条下、所有报告卡片上方提供“因子 / 收益率 / IC 类型”三个统一 select，默认第一因子、第一收益列与 `RankIC`，不提供“全部”。IC 时序、指标、图表范围与衰减使用同一 `RankIC | IC`；衰减仍保留所有收益列横轴，并高亮当前收益列。收益、多空、分组及换手共用所选因子和收益规格，分组正序 / 倒序等独立控制保留。DSL 执行统计仅受日期区间影响。切换三个维度不重置日期、不重建 DuckDB 或重新下载 Parquet；真实报告身份（文件、元数据或 workflow）变化才重置，普通等值轮询不会清空选择。
 
-新运行清单从 `input.analysis.period / price_column / max_lag` 读取收益契约，任一新字段出现即要求完整合法，不静默回退。例如 `period=5, price_column="open_hfq", max_lag=3` 的生产结果应记录 `P5L1 / P5L2 / P5L3`，每列规格为 `{ "kind": "simple", "periods": 5, "lag": k, "price_column": "open_hfq", "turnover_period": 5 }`，不生成旧 t 收盘标签。`lag=k` 指 t+k 入场、t+k+periods 出场：P5L1 为 t+1 → t+6，P5L2 为 t+2 → t+7，P5L3 为 t+3 → t+8。价格列仅支持 `open / close / open_hfq / close_hfq`；`periods` 与 `lag` 必须为正整数，不能从标签数字猜测。
+新运行清单从 `input.analysis.period / price_column / max_lag` 读取收益契约，任一新字段出现即要求完整合法，不静默回退。例如 `period=5, price_column="open_hfq", max_lag=3` 的生产结果应记录 `P5L1 / P5L2 / P5L3`，每列规格为 `{ "kind": "log", "periods": 5, "lag": k, "price_column": "open_hfq", "turnover_period": 5 }`，不生成因子当日收盘价起算的标签。`lag=k>=1` 指 t+k 入场、t+k+periods 出场，按完整交易日轴计算 `P{period}L{k}(t)=ln(price_column(t+k+period)/price_column(t+k))`：P5L1 为 t+1 → t+6，P5L2 为 t+2 → t+7，P5L3 为 t+3 → t+8。入场与退出使用同一价格列，仅支持 `open / close / open_hfq / close_hfq`，hfq 字段直接使用、不再乘 `adj_factor`；`periods` 与 `lag` 必须为正整数，不能从标签数字猜测。行情仅读取闭区间 `[start,end]`，不读取结束日后的未来区间；缺价或非正端点为 NULL，不跳过交易日或补零。
 
 换手使用每个收益规格的 `turnover_period`，缺省才使用 `periods`；新 P 收益等于 period，不是 lag。查询实际换手 Parquet 的可用 `periods`，缺对应间隔显示无数据，不冒用其他间隔。
 
@@ -70,9 +70,9 @@ http://127.0.0.1:5174/embed/report?source=jupyter&path=projects/factor/X/reports
     "factor_columns": ["momentum"],
     "return_columns": ["P5L1", "P5L2", "P5L3"],
     "return_specs": {
-      "P5L1": { "kind": "simple", "periods": 5, "lag": 1, "price_column": "open_hfq", "turnover_period": 5 },
-      "P5L2": { "kind": "simple", "periods": 5, "lag": 2, "price_column": "open_hfq", "turnover_period": 5 },
-      "P5L3": { "kind": "simple", "periods": 5, "lag": 3, "price_column": "open_hfq", "turnover_period": 5 }
+      "P5L1": { "kind": "log", "periods": 5, "lag": 1, "price_column": "open_hfq", "turnover_period": 5 },
+      "P5L2": { "kind": "log", "periods": 5, "lag": 2, "price_column": "open_hfq", "turnover_period": 5 },
+      "P5L3": { "kind": "log", "periods": 5, "lag": 3, "price_column": "open_hfq", "turnover_period": 5 }
     },
     "n_groups": 5,
     "n_select": 10
@@ -82,7 +82,11 @@ http://127.0.0.1:5174/embed/report?source=jupyter&path=projects/factor/X/reports
 
 当前只支持 Scheme 1.x。因子需要 `information_coefficient`、`group_returns`；回测按所选页面读取对应文件，不要求打开报告时四类附件全部存在。文件名必须是清单同目录下的单个名称，允许中文、空格和点开头的名称，不限制扩展名，但拒绝空名、`.`、`..`、路径分隔符、冒号及控制字符。
 
-清单未提供 `theme` 时使用 `light`。回测的 `annualTradingDays` 默认 252，显式提供时必须为正整数；`riskFreeRate` 默认 0，显式提供时必须有限。因子报告固定使用 252 个年交易日和零无风险利率。`parameters` 仅用于 factor，因子列和收益列非空且不重复；每个收益列必须有对应的 `simple` 或 `log` 规格及正整数 `periods`，额外规格忽略。分组数及选股数为正整数。历史 `return_1` 等收盘到收盘收益、历史 `r0o` / `r1` 等隔夜 / 日内收益与新 `P{period}L{k}` 同价收益保持各自定义，不混为同一口径。任意自定义收益列名都依赖显式 metadata，`custom_99` 不代表 99 日。规格中出现 `price_column` 即采用完整新契约校验：必须为 `simple`、正整数 `periods` / `lag`、合法四种价格之一，不允许混入旧 `session`；坏的新规格不静默按历史规格解释。未使用新价格 metadata 的既有 `simple` / `log` 及可选旧时段信息继续支持。多期重叠收益（无论 simple 还是 log）仅展示单期收益、IC 与分组统计，不生成年化、Sharpe 或误导净值；单期 log 保留现有指数转换逻辑，NULL 观测不填零、不伪造统计。
+清单未提供 `theme` 时使用 `light`。回测的 `annualTradingDays` 默认 252，显式提供时必须为正整数；`riskFreeRate` 默认 0，显式提供时必须有限。因子报告固定使用 252 个年交易日和零无风险利率。`parameters` 仅用于 factor，因子列和收益列非空且不重复；当前各收益列使用 `log` 规格及正整数 `periods`，额外规格忽略。分组数及选股数为正整数。历史 `return_1` 等收盘到收盘收益、历史 `r0o` / `r1` 等隔夜 / 日内收益保持原规格，不混为当前 `P{period}L{k}` 同价 log 收益。任意自定义收益列名都依赖显式 metadata，`custom_99` 不代表 99 日。规格中出现 `price_column` 即采用完整价格契约校验：`kind` 必须为 `simple` 或 `log`、`periods` / `lag` 为正整数、价格为四种合法字段之一，不允许混入旧 `session`；显式规格保留原收益类型。任务报告按实际 Scheme 版本识别：1.10 起为 `log`，1.8/1.9 为 `simple`，不将已有数据误标。未使用新价格 metadata 的既有 `simple` / `log` 及可选旧时段信息继续支持。
+
+各分组 raw 收益是当日有效 log 标签的加权均值，IC/RankIC 使用当日因子与原始 log 标签，不平滑。报告为每个因子、收益列和分组计算 `effective(t)=mean(raw(t),...,raw(t-period+1))`：当前及前 `period-1` 个交易期 raw log 收益的算术平均，开头不足 period 时使用已有样本，不额外除以 period，不平均不同 lag。先补齐完整交易日轴，缺失日期保留 NULL；窗口中任一 raw 为 NULL，则当期 effective 为 NULL，不跳过缺失。日期选择先在报告全表上计算窗口再截取，不在所选起点重启；`period=1` 使用同一规则。
+
+分组净值为 `exp(cumsum(effective))`；多空先取同日 `high-low` raw log 收益，再使用同一窗口及 NULL 规则。时序 `value=effective` 为 log，`cumulative=cumsum(effective)` 为 logsum，不是简单收益或净值。均值、年化、波动率和 Sharpe 使用同一有效序列的非 NULL 观测：均值为 logmean，年化为 `logmean*252`，波动率为 `std(effective)*sqrt(252)`，Sharpe 为 `logmean/std(effective)*sqrt(252)`。所有 period 统一展示曲线与统计，不按持有期另设显示限制；NULL 日期保留曲线断点，不补零，不可定义的指标保留 NULL。
 
 ### Jupyter 同源代理与登录
 

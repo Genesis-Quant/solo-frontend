@@ -64,13 +64,32 @@ for (const version of ["1", "1.0", "1.0.1", "1.1.0", "1.1.7", "1.2.0", "1.99.9"]
   });
 }
 
-test("Scheme major-1 factor adapter reads the period/price_column/max_lag contract consistently", () => {
-  const parameters = { factor_columns: ["alpha", "beta"], ...factorReturns.priceReturns(5, "close_hfq", 3), n_groups: 2, n_select: 10 };
-  for (const version of ["1", "1.2.3", "1.99.0"]) {
+for (const [version, kind] of [
+  ["1", "simple"], ["1.0", "simple"], ["1.2.3", "simple"], ["1.9", "simple"], ["1.9.999", "simple"],
+  ["1.10", "log"], ["1.10.0", "log"], ["1.10.99", "log"], ["1.11.0", "log"], ["1.99.0", "log"]
+]) {
+  test(`Scheme ${version} factor price returns use ${kind} with unchanged parameters, labels and turnover`, () => {
+    const parameters = { factor_columns: ["alpha", "beta"], return_columns: ["P5L1", "P5L2", "P5L3"],
+      return_specs: Object.fromEntries([1, 2, 3].map((lag) => [`P5L${lag}`, { kind, periods: 5, lag, price_column: "close_hfq", turnover_period: 5 }])),
+      n_groups: 2, n_select: 10 };
     const manifest = { protocol: 1, status: "success", versions: { scheme: version }, report_kind: "factor",
       input: { kind: "factor", analysis: { columns: ["alpha", "beta"], period: 5, max_lag: 3, price_column: "close_hfq", groups: 2, n_select: 10 } },
       reports: { information_coefficient: "ic.parquet", group_returns: "groups.parquet" } };
-    assert.deepEqual(JSON.parse(JSON.stringify(reports.parseReport(manifest, "/reports/factor", "factor").parameters)), JSON.parse(JSON.stringify(parameters)));
+    assert.deepEqual(JSON.parse(JSON.stringify(reports.parseReport(manifest, "/reports/factor", "factor").parameters)), parameters);
+  });
+}
+
+test("factor report return kind uses the actual run.json Scheme minor, not the requested version", async () => {
+  for (const [actual, requested, kind] of [["1.9.9", "1.10.0", "simple"], ["1.10.0", "1.9.9", "log"]]) {
+    const manifest = { protocol: 1, status: "success", versions: { scheme: actual }, report_kind: "factor",
+      input: { kind: "factor", analysis: { columns: ["alpha"], period: 5, max_lag: 1, price_column: "close", groups: 2, n_select: 10 } },
+      reports: { information_coefficient: "ic.parquet", group_returns: "groups.parquet" } };
+    const loader = load("../src/assets/lib/reports.ts", { "./scheme": scheme, "./factorReturns": factorReturns, "./settings": { apiUrl: "/api/v1" } }, {
+      fetch: async () => ({ ok: true, json: async () => manifest })
+    });
+    const report = await loader.loadReportPath("example/report", "factor", requested);
+    assert.equal(report.schemeVersion, actual);
+    assert.equal(report.parameters.return_specs.P5L1.kind, kind);
   }
 });
 

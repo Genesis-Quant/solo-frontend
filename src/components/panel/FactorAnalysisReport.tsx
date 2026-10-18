@@ -93,7 +93,6 @@ export default function FactorAnalysisReport({ chartRanges, onChartRanges, param
   const [executionStatisticsError, setExecutionStatisticsError] = useState("");
   const [outputErrors, setOutputErrors] = useState({ turnover: "", executionStatistics: "" });
   const returnSpec = parameters.return_specs[returnColumn];
-  const returnPeriods = returnPeriodsOf(parameters, returnColumn);
   const requestedTurnoverPeriod = returnSpec.turnover_period ?? returnSpec.periods;
   const turnoverPeriod = turnoverPeriods.includes(requestedTurnoverPeriod) ? requestedTurnoverPeriod : null;
 
@@ -221,9 +220,7 @@ export default function FactorAnalysisReport({ chartRanges, onChartRanges, param
     setGroups([]);
     setGroupStatistics([]);
     Promise.all([
-      returnPeriods === 1
-        ? session.groupSeries(factor, returnColumn, parameters.n_groups, { start: startDate, end: endDate })
-        : Promise.resolve([]),
+      session.groupSeries(factor, returnColumn, parameters.n_groups, { start: startDate, end: endDate }),
       session.groupStatistics(factor, returnColumn, parameters.n_groups, { start: startDate, end: endDate })
     ])
       .then(([series, statistics]) => {
@@ -234,7 +231,7 @@ export default function FactorAnalysisReport({ chartRanges, onChartRanges, param
       .catch((reason) => { if (!cancelled) setError(errorMessage(reason)); })
       .finally(() => { if (!cancelled) setGroupLoading(false); });
     return () => { cancelled = true; };
-  }, [endDate, factor, returnColumn, returnPeriods, analytics, parameters.n_groups, parameters.n_select, rangeReady, startDate]);
+  }, [endDate, factor, returnColumn, analytics, parameters.n_groups, parameters.n_select, rangeReady, startDate]);
 
   useEffect(() => {
     const session = analytics;
@@ -349,10 +346,9 @@ export default function FactorAnalysisReport({ chartRanges, onChartRanges, param
         {
           id: "returns",
           content: <ReportCard title="收益分析">
-            <OverlappingReturnNotice periods={returnPeriods} />
-            <MetricGrid items={returnMetrics(longShort, returnPeriods)} />
-            <ChartPanel title={returnPeriods === 1 ? "多空收益与累计收益" : "多空单期收益"}>
-              <SeriesContent loading={returnLoading} count={longShort.length} height={350}>{longShort.length > 0 && <EChart option={longShortOption(longShort, theme, returnPeriods === 1, chartRanges?.longShort)} height={350} />}</SeriesContent>
+            <MetricGrid items={returnMetrics(longShort)} />
+            <ChartPanel title="多空对数收益与累计对数收益">
+              <SeriesContent loading={returnLoading} count={longShort.length} height={350}>{longShort.length > 0 && <EChart option={longShortOption(longShort, theme, chartRanges?.longShort)} height={350} />}</SeriesContent>
             </ChartPanel>
           </ReportCard>
         },
@@ -362,18 +358,15 @@ export default function FactorAnalysisReport({ chartRanges, onChartRanges, param
             <CardToolbar>
               <Tabs value={reverseGroups ? "reverse" : "forward"} onValueChange={(value) => setReverseGroups(value === "reverse")}>
                 <TabsList aria-label="分组净值顺序">
-                  <TabsTrigger disabled={returnPeriods > 1} value="forward">正序</TabsTrigger>
-                  <TabsTrigger disabled={returnPeriods > 1} value="reverse">倒序</TabsTrigger>
+                  <TabsTrigger value="forward">正序</TabsTrigger>
+                  <TabsTrigger value="reverse">倒序</TabsTrigger>
                 </TabsList>
               </Tabs>
             </CardToolbar>
-            <OverlappingReturnNotice periods={returnPeriods} />
             <ChartPanel title={reverseGroups ? "各分组净值曲线（倒序累计）" : "各分组净值曲线"}>
-              {returnPeriods > 1
-                ? <NonCompoundableChartState periods={returnPeriods} height={350} />
-                : <SeriesContent loading={groupLoading} count={groups.length} height={350}>{groups.length > 0 && <EChart option={groupOption(displayedGroups, theme, chartRanges?.groups)} height={350} />}</SeriesContent>}
+              <SeriesContent loading={groupLoading} count={groups.length} height={350}>{groups.length > 0 && <EChart option={groupOption(displayedGroups, theme, chartRanges?.groups)} height={350} />}</SeriesContent>
             </ChartPanel>
-            <ChartPanel title="分组平均收益与显著性 p 值">
+            <ChartPanel title="分组平均对数收益与显著性 p 值">
               <SeriesContent loading={groupLoading} count={groupStatistics.length} height={330}>{groupStatistics.length > 0 && <EChart option={groupStatisticsOption(groupStatistics, theme, chartRanges?.groupStatistics)} height={330} />}</SeriesContent>
             </ChartPanel>
           </ReportCard>
@@ -409,48 +402,33 @@ export default function FactorAnalysisReport({ chartRanges, onChartRanges, param
   </section>;
 }
 
-function OverlappingReturnNotice({ periods }: { periods: number }) {
-  if (periods <= 1) return null;
-  return <div className="mx-4 mt-3 rounded-md border border-amber-500/25 bg-amber-500/8 px-3 py-2 text-xs text-muted-foreground">
-    当前收益列覆盖 {periods} 个交易期，相邻观测存在重叠；保留 IC 和单期分组统计，不计算累计净值、年化收益、波动率及 Sharpe。
-  </div>;
-}
-
 function LaggedReturnNotice({ specs }: { specs: FactorReportParameters["return_specs"] }) {
   const lags = Object.values(specs).flatMap((spec) => spec.lag === undefined || spec.session === undefined ? [] : [spec.lag + (spec.session === "overnight" ? 1 : 0)]);
   if (!lags.length) return null;
   const maxLag = Math.max(...lags);
   return <p className="text-xs leading-5 text-muted-foreground" aria-label="收益标签说明">
-    t 为因子观测日。N={maxLag}：从 t 至 t+{maxLag} 共涉及 {maxLag + 1} 个交易日（N+1），完整标签为 {maxLag * 2} 个单段简单收益，非累计多日收益。
-    k=1…{maxLag}：r&#123;k-1&#125;o 为隔夜 C_adj(t+k-1) → O_adj(t+k)，r&#123;k&#125; 为日内 O_adj(t+k) → C_adj(t+k)，均为终价 / 初价 − 1。
+    t 为因子观测日。N={maxLag}：从 t 至 t+{maxLag} 共涉及 {maxLag + 1} 个交易日（N+1），完整标签为 {maxLag * 2} 个单段对数收益，非累计多日收益。
+    k=1…{maxLag}：r&#123;k-1&#125;o 为隔夜 C_adj(t+k-1) → O_adj(t+k)，r&#123;k&#125; 为日内 O_adj(t+k) → C_adj(t+k)，均为 ln(终价 / 初价)。
     每列 periods=1，每个交易日一条观测；年化仍按 252 个交易日。换手比较间隔独立于收益时段。
   </p>;
 }
 
 function ReturnContract({ spec }: { spec?: FactorReturnSpec }) {
   if (!spec) return null;
-  const compoundable = spec.periods === 1;
   const time = (lag: number) => lag === 0 ? "t" : `t+${lag}`;
   const prices = { open: "开盘价", close: "收盘价", open_hfq: "后复权开盘价", close_hfq: "后复权收盘价" };
   const interval = spec.price_column && spec.lag !== undefined
     ? `${prices[spec.price_column]} ${time(spec.lag)} → ${time(spec.lag + spec.periods)}`
-    : spec.lag === undefined || spec.session === undefined ? null : spec.session === "overnight"
-      ? `隔夜 C_adj(${time(spec.lag)}) → O_adj(${time(spec.lag + 1)})`
-      : `日内 O_adj(${time(spec.lag)}) → C_adj(${time(spec.lag)})`;
+    : spec.lag === undefined || spec.session === undefined
+      ? null
+      : spec.session === "overnight"
+        ? `隔夜 C_adj(${time(spec.lag)}) → O_adj(${time(spec.lag + 1)})`
+        : `日内 O_adj(${time(spec.lag)}) → C_adj(${time(spec.lag)})`;
   return <div className="flex flex-wrap items-center gap-1 text-xs" aria-label="收益口径">
-    <span className="rounded-sm bg-muted px-2 py-1 text-muted-foreground">{spec.kind === "log" ? "对数收益" : "简单收益"}</span>
+    <span className="rounded-sm bg-muted px-2 py-1 text-muted-foreground">对数收益</span>
     {interval && <span className="rounded-sm bg-muted px-2 py-1 text-muted-foreground">{interval}</span>}
     {spec.price_column && <span className="rounded-sm bg-muted px-2 py-1 text-muted-foreground">入场滞后 {spec.lag} 个交易日</span>}
     <span className="rounded-sm bg-muted px-2 py-1 text-muted-foreground">{spec.price_column ? `跨度 ${spec.periods} 个交易日` : `${spec.periods} 期`}</span>
-    <span className={compoundable ? "rounded-sm bg-emerald-500/10 px-2 py-1 text-emerald-600 dark:text-emerald-400" : "rounded-sm bg-amber-500/12 px-2 py-1 text-amber-700 dark:text-amber-300"}>
-      {compoundable ? "可复利" : "重叠 · 不可复利"}
-    </span>
-  </div>;
-}
-
-function NonCompoundableChartState({ height, periods }: { height: number; periods: number }) {
-  return <div className="grid place-items-center rounded-md border border-dashed border-amber-500/25 bg-amber-500/5 px-6 text-center text-xs text-muted-foreground" style={{ height }}>
-    <div><div className="text-sm text-foreground">该收益列覆盖 {periods} 期，不能连续复利</div><div className="mt-2">分组平均单期收益与显著性仍可使用；净值曲线不生成。</div></div>
   </div>;
 }
 
@@ -471,20 +449,19 @@ function informationMetrics(rows: InformationPoint[], type: IcType): DisplayMetr
   ];
 }
 
-function returnMetrics(rows: LongShortPoint[], periods: number): DisplayMetric[] {
-  const compoundable = periods === 1;
+function returnMetrics(rows: LongShortPoint[]): DisplayMetric[] {
   const values = rows.map((row) => row.value).filter((value): value is number => value !== null);
-  const cumulative = compoundable ? rows.reduce<number | null>((current, row) => row.cumulative ?? current, null) : null;
-  const annualReturn = cumulative === null || !values.length || 1 + cumulative <= 0 ? null : (1 + cumulative) ** (252 / values.length) - 1;
-  const annualVolatility = compoundable && values.length ? standardDeviation(values) * Math.sqrt(252) : null;
+  const cumulative = rows.reduce<number | null>((current, row) => row.cumulative ?? current, null);
+  const annualReturn = cumulative === null || !values.length ? null : cumulative * 252 / values.length;
+  const annualVolatility = values.length ? standardDeviation(values) * Math.sqrt(252) : null;
   return [
-    { label: "多空累计收益", value: format(cumulative, "percent") },
-    { label: "多空年化收益", value: format(annualReturn, "percent") },
+    { label: "多空累计对数收益", value: format(cumulative, "percent") },
+    { label: "多空年化对数收益", value: format(annualReturn, "percent") },
     { label: "多空年化 Sharpe", value: format(annualReturn !== null && annualVolatility ? annualReturn / annualVolatility : null) },
-    { label: "多空最大回撤", value: format(compoundable ? maxDrawdown(rows) : null, "percent") },
-    { label: "多空年化波动", value: format(annualVolatility, "percent") },
-    { label: "多空单期收益均值", value: format(values.length ? statisticsMean(values) : null, "percent") },
-    { label: "多空单期收益标准差", value: format(values.length > 1 ? sampleStandardDeviation(values) : null, "percent") }
+    { label: "多空最大回撤", value: format(maxDrawdown(rows), "percent") },
+    { label: "多空年化对数波动", value: format(annualVolatility, "percent") },
+    { label: "多空单期对数收益均值", value: format(values.length ? statisticsMean(values) : null, "percent") },
+    { label: "多空单期对数收益标准差", value: format(values.length > 1 ? sampleStandardDeviation(values) : null, "percent") }
   ];
 }
 
@@ -648,21 +625,19 @@ function rollingMean(values: Array<number | null>, window: number) {
   });
 }
 
-function longShortOption(rows: LongShortPoint[], theme: string, compoundable: boolean, ranges?: DualChartRanges) {
+function longShortOption(rows: LongShortPoint[], theme: string, ranges?: DualChartRanges) {
   const series = [
-    { name: "多空收益", type: "bar", data: rows.map((row) => row.value), itemStyle: { color: "#2563eb", opacity: 0.55 } },
-    ...compoundable ? [{ name: "累计收益", type: "line", yAxisIndex: 1, data: rows.map((row) => row.cumulative), showSymbol: false, lineStyle: { width: 2.2 }, color: "#d97706" }] : []
+    { name: "多空对数收益", type: "bar", data: rows.map((row) => row.value), itemStyle: { color: "#2563eb", opacity: 0.55 } },
+    { name: "累计对数收益", type: "line", yAxisIndex: 1, data: rows.map((row) => row.cumulative), showSymbol: false, lineStyle: { width: 2.2 }, color: "#d97706" }
   ];
   const option: Record<string, unknown> = baseOption(theme, rows.map((row) => row.time), series, ranges?.primary);
-  option.yAxis = compoundable
-    ? [axis(theme, true, ranges?.primary, "percent"), axis(theme, false, ranges?.secondary, "percent")]
-    : axis(theme, true, ranges?.primary, "percent");
+  option.yAxis = [axis(theme, true, ranges?.primary, "percent"), axis(theme, false, ranges?.secondary, "percent")];
   return option;
 }
 
 function groupStatisticsOption(rows: GroupStatistic[], theme: string, range?: ChartRange) {
   const option: Record<string, unknown> = baseOption(theme, rows.map((row) => row.group), [
-    { name: "平均收益", type: "bar", data: rows.map((row) => row.mean), itemStyle: { color: "#2563eb", opacity: 0.72 }, barMaxWidth: 34 },
+    { name: "平均对数收益", type: "bar", data: rows.map((row) => row.mean), itemStyle: { color: "#2563eb", opacity: 0.72 }, barMaxWidth: 34 },
     { name: "p 值", type: "line", yAxisIndex: 1, data: rows.map((row) => row.pValue), symbolSize: 7, lineStyle: { width: 1.8 }, color: "#d97706", markLine: thresholdMarkLine(theme, "p = 0.05", 0.05) }
   ], range);
   option.xAxis = { ...(option.xAxis as Record<string, unknown>), boundaryGap: true };
@@ -765,7 +740,7 @@ function maxDrawdown(rows: LongShortPoint[]) {
   let maximum: number | null = null;
   for (const row of rows) {
     if (row.cumulative === null) continue;
-    const value = 1 + row.cumulative;
+    const value = Math.exp(row.cumulative);
     peakValue = Math.max(peakValue, value);
     maximum = Math.max(maximum ?? 0, peakValue > 0 ? 1 - value / peakValue : 0);
   }
@@ -784,10 +759,6 @@ function formatPValue(value: number | null) {
 function format(value: number | null | undefined, type: "number" | "percent" = "number") {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
   return type === "percent" ? `${(value * 100).toFixed(2)}%` : value.toFixed(4);
-}
-
-function returnPeriodsOf(parameters: FactorReportParameters, returnColumn: string) {
-  return parameters.return_specs[returnColumn].periods;
 }
 
 function executionFilterRemovedCount(row: ExecutionStatisticPoint, filterIndex: number) {
