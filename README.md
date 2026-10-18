@@ -11,12 +11,19 @@ npm run dev
 
 ```powershell
 npm run lint
+node --test tests/*.test.mjs
 npm run build
 ```
 
 提供五类项目管理、版本详情、只读参数与依赖、产物清单、策略组装和任务及日志窗口；项目和研究成果读取真实 Backend 接口。成功版本复用 Arena 的 `FactorAnalysisReport`、`BacktestReport` 及其 DuckDB、统计与图表实现：因子项目显示因子分析，其余项目暂用同一份策略回测报告。运行中和失败版本显示任务状态。
 
 报告通过 `src/assets/lib/reports.ts` 按运行清单中的 `versions.scheme` 大版本选择适配器。当前支持 Scheme 1.x；未知或缺失版本显示错误，不回退套用旧报告。适配器决定报告文件映射、因子列、收益持有期和显示参数，图表组件通过注入的数据接口读取 Parquet。左侧下载链接与图表使用同一份运行清单。
+
+因子报告在日期条下、所有报告卡片上方提供“因子 / 收益率 / IC 类型”三个统一 select，默认第一因子、第一收益列与 `RankIC`，不提供“全部”。IC 时序、指标、图表范围与衰减使用同一 `RankIC | IC`；衰减仍保留所有收益列横轴，并高亮当前收益列。收益、多空、分组及换手共用所选因子和收益规格，分组正序 / 倒序等独立控制保留。DSL 执行统计仅受日期区间影响。切换三个维度不重置日期、不重建 DuckDB 或重新下载 Parquet；真实报告身份（文件、元数据或 workflow）变化才重置，普通等值轮询不会清空选择。
+
+新运行清单从 `input.analysis.period / price_column / max_lag` 读取收益契约，任一新字段出现即要求完整合法，不静默回退。例如 `period=5, price_column="open_hfq", max_lag=3` 的生产结果应记录 `P5L1 / P5L2 / P5L3`，每列规格为 `{ "kind": "simple", "periods": 5, "lag": k, "price_column": "open_hfq", "turnover_period": 5 }`，不生成旧 t 收盘标签。`lag=k` 指 t+k 入场、t+k+periods 出场：P5L1 为 t+1 → t+6，P5L2 为 t+2 → t+7，P5L3 为 t+3 → t+8。价格列仅支持 `open / close / open_hfq / close_hfq`；`periods` 与 `lag` 必须为正整数，不能从标签数字猜测。
+
+换手使用每个收益规格的 `turnover_period`，缺省才使用 `periods`；新 P 收益等于 period，不是 lag。查询实际换手 Parquet 的可用 `periods`，缺对应间隔显示无数据，不冒用其他间隔。
 
 运行记录提供 `reportPath`（相对于共享 runs 目录的输出目录），前端读取 `/api/v1/reports/{reportPath}/run.json` 及其中声明的 Parquet。报告版本取自该次实际运行，与项目创建时的版本无关；未关联真实目录的记录不会显示示例报告。
 
@@ -61,8 +68,12 @@ http://127.0.0.1:5174/embed/report?source=jupyter&path=projects/factor/X/reports
   },
   "parameters": {
     "factor_columns": ["momentum"],
-    "return_columns": ["return_1"],
-    "return_specs": { "return_1": { "kind": "simple", "periods": 1 } },
+    "return_columns": ["P5L1", "P5L2", "P5L3"],
+    "return_specs": {
+      "P5L1": { "kind": "simple", "periods": 5, "lag": 1, "price_column": "open_hfq", "turnover_period": 5 },
+      "P5L2": { "kind": "simple", "periods": 5, "lag": 2, "price_column": "open_hfq", "turnover_period": 5 },
+      "P5L3": { "kind": "simple", "periods": 5, "lag": 3, "price_column": "open_hfq", "turnover_period": 5 }
+    },
     "n_groups": 5,
     "n_select": 10
   }
@@ -71,7 +82,7 @@ http://127.0.0.1:5174/embed/report?source=jupyter&path=projects/factor/X/reports
 
 当前只支持 Scheme 1.x。因子需要 `information_coefficient`、`group_returns`；回测按所选页面读取对应文件，不要求打开报告时四类附件全部存在。文件名必须是清单同目录下的单个名称，允许中文、空格和点开头的名称，不限制扩展名，但拒绝空名、`.`、`..`、路径分隔符、冒号及控制字符。
 
-清单未提供 `theme` 时使用 `light`。回测的 `annualTradingDays` 默认 252，显式提供时必须为正整数；`riskFreeRate` 默认 0，显式提供时必须有限。因子报告固定使用 252 个年交易日和零无风险利率。`parameters` 仅用于 factor，因子列和收益列非空且不重复；每个收益列必须有对应的 `simple` 或 `log` 规格及正整数 `periods`，额外规格忽略。分组数及选股数为正整数。旧 `return_1` 等收盘到收盘收益与新版 `r0o`、`r1` 等隔夜/日内收益保持各自定义，不混为同一口径。
+清单未提供 `theme` 时使用 `light`。回测的 `annualTradingDays` 默认 252，显式提供时必须为正整数；`riskFreeRate` 默认 0，显式提供时必须有限。因子报告固定使用 252 个年交易日和零无风险利率。`parameters` 仅用于 factor，因子列和收益列非空且不重复；每个收益列必须有对应的 `simple` 或 `log` 规格及正整数 `periods`，额外规格忽略。分组数及选股数为正整数。历史 `return_1` 等收盘到收盘收益、历史 `r0o` / `r1` 等隔夜 / 日内收益与新 `P{period}L{k}` 同价收益保持各自定义，不混为同一口径。任意自定义收益列名都依赖显式 metadata，`custom_99` 不代表 99 日。规格中出现 `price_column` 即采用完整新契约校验：必须为 `simple`、正整数 `periods` / `lag`、合法四种价格之一，不允许混入旧 `session`；坏的新规格不静默按历史规格解释。未使用新价格 metadata 的既有 `simple` / `log` 及可选旧时段信息继续支持。多期重叠收益（无论 simple 还是 log）仅展示单期收益、IC 与分组统计，不生成年化、Sharpe 或误导净值；单期 log 保留现有指数转换逻辑，NULL 观测不填零、不伪造统计。
 
 ### Jupyter 同源代理与登录
 

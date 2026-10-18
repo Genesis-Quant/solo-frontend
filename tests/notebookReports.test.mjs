@@ -262,6 +262,60 @@ test("Notebook reports without metadata keep their declared specs even when colu
   assert.deepEqual(JSON.parse(JSON.stringify(parser.parseNotebookReport(manifest("factor", { parameters }), path).parameters)), parameters);
 });
 
+for (const price of ["open", "close", "open_hfq", "close_hfq"]) {
+  test(`new period/price/max_lag analysis generates exact P5L1..3 ${price} specs and preserves them in Notebook`, () => {
+    const report = reportModule(parser).parseReport(factorRun({ period: 5, price_column: price, max_lag: 3 }), "/reports/price", "factor");
+    const parameters = JSON.parse(JSON.stringify(report.parameters));
+    assert.deepEqual(parameters.return_columns, ["P5L1", "P5L2", "P5L3"]);
+    for (let lag = 1; lag <= 3; lag++) assert.deepEqual(parameters.return_specs[`P5L${lag}`], {
+      kind: "simple", periods: 5, lag, price_column: price, turnover_period: 5
+    });
+    assert.deepEqual(JSON.parse(JSON.stringify(parser.parseNotebookReport(manifest("factor", { parameters }), path).parameters)), parameters);
+    assert.ok(parameters.return_columns.every((column) => !/^(r\d|return_|t)/.test(column)));
+  });
+}
+
+test("price generation requires complete valid inputs and never substitutes a legacy label", () => {
+  for (const [period, price, lag] of [
+    [5, undefined, 3], [undefined, "close", 3], [5, "close", undefined],
+    ...[undefined, null, false, true, "5", 0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1].flatMap((value) => [[value, "open", 3], [5, "open", value]]),
+    ...[undefined, null, "", "OPEN", "vwap", "adj_close", 1, {}].map((price) => [5, price, 3])
+  ]) assert.throws(() => factorReturns.priceReturns(period, price, lag), /报告/);
+});
+
+test("any new analysis field requires the complete price contract without a legacy fallback", () => {
+  const existing = reportModule(parser);
+  const good = { period: 5, price_column: "open_hfq", max_lag: 3 };
+  for (const analysis of [
+    { period: 5 }, { price_column: "close" }, { period: 5, max_lag: 3 }, { price_column: "close", max_lag: 3 }, { period: 5, price_column: "close" },
+    ...[undefined, null, false, true, "5", 0, -1, 1.5, NaN, Infinity].flatMap((value) => [{ ...good, period: value }, { ...good, max_lag: value }]),
+    ...[undefined, null, "", "OPEN", "vwap", 1].map((price_column) => ({ ...good, price_column })),
+    { ...good, return_periods: [1, 5] }
+  ]) assert.throws(() => existing.parseReport(factorRun(analysis), "/reports/price", "factor"), /报告/);
+});
+
+test("new Notebook metadata is explicit, accepts arbitrary column names and preserves per-return turnover mapping", () => {
+  const parameters = { factor_columns: ["first", "second"], return_columns: ["custom_99", "P1L100", "one_day"], n_groups: 2, n_select: 10,
+    return_specs: {
+      custom_99: { kind: "simple", periods: 5, lag: 2, price_column: "close_hfq", turnover_period: 7 },
+      P1L100: { kind: "simple", periods: 3, lag: 1, price_column: "open" },
+      one_day: { kind: "simple", periods: 1, lag: 3, price_column: "close", turnover_period: 1 }
+    } };
+  assert.deepEqual(JSON.parse(JSON.stringify(parser.parseNotebookReport(manifest("factor", { parameters }), path).parameters)), parameters);
+});
+
+test("new Notebook price metadata rejects incomplete or illegal specs without a label-based fallback", () => {
+  const good = { kind: "simple", periods: 5, lag: 1, price_column: "open_hfq", turnover_period: 5 };
+  for (const spec of [
+    ...[undefined, null, false, true, 0, -1, 1.5, "1", Infinity, NaN, Number.MAX_SAFE_INTEGER + 1].flatMap((value) => [{ ...good, lag: value }, { ...good, periods: value }]),
+    ...[undefined, null, "", "vwap", "OPEN", 1, {}].map((price_column) => ({ ...good, price_column })),
+    ...[null, 0, -1, 1.5, "1", Infinity, Number.MAX_SAFE_INTEGER + 1].map((turnover_period) => ({ ...good, turnover_period })),
+    { ...good, kind: "log" }, { ...good, session: "intraday" }, { ...good, session: undefined }
+  ]) assert.throws(() => parser.parseNotebookReport(manifest("factor", { parameters: {
+    factor_columns: ["factor"], return_columns: ["P5L1"], return_specs: { P5L1: spec }, n_groups: 2, n_select: 10
+  } }), path), /报告/);
+});
+
 test("manifest and Parquet GETs forward decoded browser XSRF only on local Jupyter URLs", async () => {
   const calls = [];
   const files = notebook({ document: { cookie: "other=x; _xsrf=2%7Cbrowser-xsrf%7Ctimestamp; session=browser-cookie" }, fetch: async (url, options) => {

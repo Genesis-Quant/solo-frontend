@@ -64,6 +64,16 @@ for (const version of ["1", "1.0", "1.0.1", "1.1.0", "1.1.7", "1.2.0", "1.99.9"]
   });
 }
 
+test("Scheme major-1 factor adapter reads the period/price_column/max_lag contract consistently", () => {
+  const parameters = { factor_columns: ["alpha", "beta"], ...factorReturns.priceReturns(5, "close_hfq", 3), n_groups: 2, n_select: 10 };
+  for (const version of ["1", "1.2.3", "1.99.0"]) {
+    const manifest = { protocol: 1, status: "success", versions: { scheme: version }, report_kind: "factor",
+      input: { kind: "factor", analysis: { columns: ["alpha", "beta"], period: 5, max_lag: 3, price_column: "close_hfq", groups: 2, n_select: 10 } },
+      reports: { information_coefficient: "ic.parquet", group_returns: "groups.parquet" } };
+    assert.deepEqual(JSON.parse(JSON.stringify(reports.parseReport(manifest, "/reports/factor", "factor").parameters)), JSON.parse(JSON.stringify(parameters)));
+  }
+});
+
 test("Scheme versions accept only one to three formal numeric segments", () => {
   for (const version of ["v1.2.3", "1.2.3a1", "1.2.3rc1", "1.2.3+build", "1.2.3.4", "1.2.3\n", " 1.2.3", "1.", ".1", ""]) {
     assert.equal(scheme.schemeMajor(version), null);

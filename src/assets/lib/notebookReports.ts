@@ -15,7 +15,7 @@ function object(value: unknown): Record<string, unknown> {
 }
 
 function positiveInteger(value: unknown): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) throw new Error("报告参数必须为正整数");
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) throw new Error("报告参数必须为正整数");
   return value;
 }
 

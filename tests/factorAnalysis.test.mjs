@@ -30,9 +30,12 @@ function load(relative, overrides = {}, extra = "") {
   return module.exports;
 }
 
-const { laggedReturns } = load("../src/assets/lib/factorReturns.ts");
+const { laggedReturns, priceReturns } = load("../src/assets/lib/factorReturns.ts");
 function parameters(maxLag = 3) {
   return { factor_columns: ["momentum_7"], ...laggedReturns(maxLag), n_groups: 2, n_select: 10 };
+}
+function priceParameters(period = 5, maxLag = 3) {
+  return { factor_columns: ["factor_a", "factor_b"], ...priceReturns(period, "open_hfq", maxLag), n_groups: 2, n_select: 10 };
 }
 async function analyticsFixture(input = parameters(), turnover = true) {
   const queries = [];
@@ -68,6 +71,27 @@ test("new labels reach SQL verbatim and all use single-period compounding and 25
   const decay = await session.decay("momentum_7", input.return_columns);
   assert.deepEqual(Array.from(decay, (point) => point.label), Array.from(input.return_columns));
   assert.deepEqual(Array.from(decay, (point) => point.position), [0, 1, 2, 3, 4, 5]);
+});
+
+test("P5L1..3 SQL uses metadata spans, keeps the whole decay axis and never compounds overlapping returns", async () => {
+  for (const period of [1, 5]) {
+    const input = priceParameters(period);
+    const { session, queries } = await analyticsFixture(input);
+    for (const factor of input.factor_columns) for (const column of input.return_columns) {
+      await session.informationSeries(factor, column, { start: "2026-01-06", end: "2026-01-07" });
+      assert.ok(queries.at(-1).includes(`"${factor}_${column}_ic"`));
+      assert.match(queries.at(-1), /BETWEEN DATE '2026-01-06' AND DATE '2026-01-07'/);
+      await session.longShortSeries(factor, column);
+      assert.equal(queries.at(-1).includes("NULL::DOUBLE AS cumulative"), period > 1);
+      await session.groupSeries(factor, column, 2);
+      assert.equal(queries.at(-1).includes('NULL::DOUBLE AS "series_0"'), period > 1);
+      await session.groupStatistics(factor, column, 2);
+      assert.ok(queries.at(-1).includes(`avg("${factor}_${column}_group0")`));
+    }
+    const decay = await session.decay(input.factor_columns[0], input.return_columns);
+    assert.deepEqual(Array.from(decay, (row) => row.returnColumn), Array.from(input.return_columns));
+    assert.ok(decay.every((row) => row.icMean === null && row.rankIcMean === null));
+  }
 });
 
 test("legacy and custom labels use declared periods rather than parsing digits from column names", async () => {
@@ -164,7 +188,7 @@ const panel = load("../src/components/panel/FactorAnalysisReport.tsx", {
   "@/store": {},
   "~icons/lucide/database": { __esModule: true, default: "IconDatabase" },
   "~icons/lucide/loader-circle": { __esModule: true, default: "IconLoaderCircle" }
-}, "\nexport { LaggedReturnNotice, ReturnContract, OverlappingReturnNotice, returnMetrics, maxDrawdown, longShortOption, returnPeriodsOf };");
+}, "\nexport { LaggedReturnNotice, ReturnContract, OverlappingReturnNotice, returnMetrics, maxDrawdown, longShortOption, returnPeriodsOf, informationMetrics, informationOption, decaySummary, decayOption, ReportSelect };");
 function text(Component, props) {
   return renderToStaticMarkup(React.createElement(Component, props)).replace(/<[^>]+>/g, "");
 }
@@ -196,6 +220,31 @@ test("selected new return specs display the exact adjusted overnight and intrada
   assert.match(legacy, /简单收益2 期重叠 · 不可复利/);
   assert.doesNotMatch(legacy, /隔夜|日内|C_adj|O_adj/);
   assert.match(text(panel.OverlappingReturnNotice, { periods: 2 }), /相邻观测存在重叠/);
+});
+
+test("new price contracts explain exact entry and exit trading days without the historical segment notice", () => {
+  for (const [price, label] of [["open", "开盘价"], ["close", "收盘价"], ["open_hfq", "后复权开盘价"], ["close_hfq", "后复权收盘价"]]) {
+    const specs = priceReturns(5, price, 3).return_specs;
+    assert.equal(text(panel.LaggedReturnNotice, { specs }), "");
+    for (let lag = 1; lag <= 3; lag++) {
+      const contract = text(panel.ReturnContract, { spec: specs[`P5L${lag}`] });
+      assert.ok(contract.includes(`${label} t+${lag} → t+${lag + 5}`));
+      assert.ok(contract.includes(`入场滞后 ${lag} 个交易日`));
+      assert.match(contract, /跨度 5 个交易日.*重叠 · 不可复利/);
+      assert.doesNotMatch(contract, /隔夜|日内|N=/);
+    }
+  }
+});
+
+test("IC summaries and selected decay ignore NULL samples and never mix IC with RankIC", () => {
+  const information = [{ time: "a", ic: null, rankIc: 0.5 }, { time: "b", ic: 0.2, rankIc: null }, { time: "c", ic: 0.4, rankIc: 0.1 }];
+  assert.equal(panel.informationMetrics(information, "IC")[0].value, "0.3000");
+  assert.equal(panel.informationMetrics(information, "RankIC")[0].value, "0.3000");
+  assert.ok(panel.informationMetrics([{ time: "a", ic: null, rankIc: null }], "IC").every((metric) => metric.value === "—"));
+  const decay = [{ label: "a", returnColumn: "a", position: 0, icMean: 0.6, rankIcMean: 0.1 }, { label: "b", returnColumn: "b", position: 1, icMean: 0.2, rankIcMean: 0.5 }, { label: "c", returnColumn: "c", position: 2, icMean: null, rankIcMean: 0.2 }];
+  assert.deepEqual(Array.from(panel.decaySummary(decay, "IC"), (metric) => metric.value), ["a", "0.6000", "b"]);
+  assert.deepEqual(Array.from(panel.decaySummary(decay, "RankIC"), (metric) => metric.value), ["b", "0.5000", "c"]);
+  assert.ok(panel.decaySummary([{ label: "a", returnColumn: "a", position: 0, icMean: null, rankIcMean: null }], "RankIC").every((metric) => metric.value === "—"));
 });
 
 function reportElements(tree, name) {
@@ -238,7 +287,7 @@ function reportFixture(relative, overrides, props) {
     queueMicrotask(() => { queued = false; if (!closed) render(); });
   }
   const Component = load(relative, { react: hooks,
-    "@/assets/lib/chart": { thresholdMarkLine: () => ({}) }, "@/assets/lib/utils": { errorMessage: (reason) => reason.message },
+    "@/assets/lib/chart": { thresholdMarkLine: () => ({}), chartRange: (values) => { const finite = values.filter((value) => value !== null && Number.isFinite(value)); return finite.length ? { min: Math.min(...finite), max: Math.max(...finite) } : undefined; } }, "@/assets/lib/utils": { errorMessage: (reason) => reason.message },
     "@/components/bar/DateRangeBar": { __esModule: true, default: "DateRangeBar" },
     "@/components/chart/EChart": { __esModule: true, default: "EChart" },
     "@/components/card/SortableCardStack": { __esModule: true, default: "SortableCardStack" },
@@ -262,6 +311,195 @@ function reportFixture(relative, overrides, props) {
     close() { closed = true; slots.forEach((slot) => slot.cleanup?.()); }
   };
 }
+
+function syntheticReport(input = priceParameters()) {
+  const calls = [], downloads = [], created = [], closed = [];
+  const dates = ["2026-01-05", "2026-01-06", "2026-01-07", "2026-01-08"];
+  const pickDates = (range) => dates.filter((time) => !range || time >= range.start && time <= range.end);
+  function session(parameters) {
+    const check = (name, factor, column, range) => {
+      assert.ok(parameters.factor_columns.includes(factor), `unknown factor ${factor}`);
+      if (column) assert.ok(parameters.return_columns.includes(column), `unknown return ${column}`);
+      calls.push({ name, factor, column, range });
+    };
+    return {
+      async informationSeries(factor, column, range) {
+        check("information", factor, column, range);
+        const value = parameters.factor_columns.indexOf(factor) + parameters.return_columns.indexOf(column) / 10;
+        return pickDates(range).map((time, index) => ({ time, ic: index === 1 ? null : value + 0.1, rankIc: index === 1 ? null : value + 0.3, icCumulative: index === 1 ? null : value + 0.2, rankIcCumulative: index === 1 ? null : value + 0.6 }));
+      },
+      async longShortSeries(factor, column, range) { check("returns", factor, column, range); return pickDates(range).map((time) => ({ time, value: 0.01, cumulative: parameters.return_specs[column].periods === 1 ? 0.01 : null })); },
+      async groupSeries(factor, column, _groups, range) { check("groups", factor, column, range); return pickDates(range).map((time) => ({ time, values: { "Group 1": 1.01 }, reverseValues: { "Group 1": 1.01 } })); },
+      async groupStatistics(factor, column, _groups, range) { check("groupStatistics", factor, column, range); return [{ group: "Group 1", mean: 0.01, pValue: null }]; },
+      async decay(factor, columns, range) { check("decay", factor, undefined, range); return columns.map((returnColumn, position) => ({ returnColumn, label: returnColumn, position, icMean: [0.6, 0.3, null][position] ?? null, rankIcMean: [0.1, 0.4, null][position] ?? null })); },
+      async turnoverPeriods(factor) { check("periods", factor); return [1, 2, 5, 7]; },
+      async turnoverSummary(factor, periods, _groups, range) { check("turnover", factor, undefined, range); calls.at(-1).periods = periods; return { periods, rankAutocorrelation: 0.5, groups: [{ group: "Group 1", value: 0.2 }] }; },
+      async executionStatistics(range) { calls.push({ name: "execution", range }); return pickDates(range).map((time) => ({ time, sourceCount: 10, filteredCount: 8, filters: [] })); },
+      async close() { closed.push(parameters); }
+    };
+  }
+  const api = { async outputs() { return ["information_coefficient", "group_returns", "group_turnover", "execution_statistics"].map((name) => ({ name })); }, async output(_id, name) { downloads.push(name); return new ArrayBuffer(0); } };
+  const app = reportFixture("../src/components/panel/FactorAnalysisReport.tsx", {
+    "@/assets/lib/reports": { useReportApi: () => api },
+    "@/assets/lib/factorAnalysis": { FactorAnalytics: { create: async (_id, _files, parameters) => { created.push(parameters); return session(parameters); } } }
+  }, { parameters: input, workflowInstanceId: 7 });
+  return { app, calls, downloads, created, closed,
+    choose: (label, value) => app.nodes("ReportSelect").find((node) => node.props.label === label).props.onChange(value),
+    selected: () => Object.fromEntries(app.nodes("ReportSelect").map((node) => [node.props.label, node.props.value]))
+  };
+}
+
+test("three report selectors sit under dates, use accessible Radix selects, and share all applicable dimensions", async () => {
+  const fixture = syntheticReport();
+  const { app, calls, choose } = fixture;
+  try {
+    await app.settle();
+    assert.deepEqual(fixture.selected(), { 因子: "factor_a", 收益率: "P5L1", "IC 类型": "RankIC" });
+    const controls = app.tree.props.children.find((node) => node?.props?.["aria-label"] === "报告筛选");
+    assert.match(controls.props.className, /grid-cols-1.*sm:grid-cols-3/);
+    assert.equal(app.tree.props.children.indexOf(controls), 1, "controls follow the date range directly");
+    assert.equal(app.nodes("ReturnSelector").length + app.nodes("Segmented").length, 0);
+    for (const selector of app.nodes("ReportSelect")) {
+      const tree = panel.ReportSelect(selector.props);
+      assert.equal(reportElements(tree, "SelectTrigger")[0].props["aria-label"], selector.props.label);
+      assert.equal(reportElements(tree, "Select").length, 1);
+      assert.ok(reportElements(tree, "SelectItem").every((option) => !["all", "全部"].includes(option.props.value)));
+    }
+    app.nodes("DateRangeBar")[0].props.onRangeChange("2026-01-06", "2026-01-07"); await app.settle();
+    const executionCount = calls.filter((call) => call.name === "execution").length;
+    choose("因子", "factor_b"); await app.settle();
+    choose("收益率", "P5L3"); await app.settle();
+    choose("IC 类型", "IC"); await app.settle();
+    assert.equal(app.nodes("DateRangeBar")[0].props.startDate, "2026-01-06");
+    assert.equal(app.nodes("DateRangeBar")[0].props.endDate, "2026-01-07");
+    assert.equal(fixture.created.length, 1);
+    assert.equal(fixture.downloads.length, 4, "dimension changes reuse the session and downloaded Parquet");
+    assert.equal(calls.filter((call) => call.name === "execution").length, executionCount, "DSL statistics only depend on dates");
+    for (const name of ["information", "returns", "groupStatistics"]) {
+      const call = calls.filter((call) => call.name === name).at(-1);
+      assert.equal(call.factor, "factor_b"); assert.equal(call.column, "P5L3");
+      assert.equal(call.range.start, "2026-01-06"); assert.equal(call.range.end, "2026-01-07");
+    }
+    assert.equal(calls.filter((call) => call.name === "turnover").at(-1).periods, 5, "P5L3 maps turnover to period 5, not lag 3");
+    assert.equal(calls.filter((call) => call.name === "turnover").at(-1).factor, "factor_b");
+    const information = reportElements(app.card("information"), "EChart")[0].props.option;
+    assert.equal(information.series[0].name, "IC");
+    assert.equal(app.nodes("DateRangeBar")[0].props.points[0].value, 1.3, "date preview follows factor/return/IC");
+    const decay = reportElements(app.card("decay"), "EChart")[0].props.option;
+    assert.equal(decay.series.length, 1); assert.equal(decay.series[0].name, "IC 均值");
+    assert.deepEqual(Array.from(decay.xAxis.data), ["P5L1", "P5L2", "P5L3"]);
+    assert.deepEqual(Array.from(decay.series[0].data, (point) => point.value), [0.6, 0.3, null]);
+    assert.deepEqual(Array.from(decay.series[0].data, (point) => point.itemStyle.opacity), [0.4, 0.4, 1]);
+    assert.equal(reportElements(app.card("decay"), "SummaryTiles")[0].props.items[0].value, "P5L1");
+    assert.equal(reportElements(app.card("groups"), "NonCompoundableChartState").length, 1);
+    assert.equal(reportElements(app.card("returns"), "EChart")[0].props.option.series.length, 1);
+  } finally { app.close(); }
+});
+
+test("a new report scope resets selectors and dates before querying, while same-value polling preserves them", async () => {
+  const { app, calls, choose, selected, created, closed } = syntheticReport();
+  try {
+    await app.settle();
+    choose("因子", "factor_b"); await app.settle(); choose("收益率", "P5L3"); await app.settle(); choose("IC 类型", "IC"); await app.settle();
+    app.nodes("DateRangeBar")[0].props.onRangeChange("2026-01-06", "2026-01-07"); await app.settle();
+    app.update({ parameters: JSON.parse(JSON.stringify(priceParameters())) }); await app.settle();
+    assert.deepEqual(selected(), { 因子: "factor_b", 收益率: "P5L3", "IC 类型": "IC" });
+    assert.equal(created.length, 1);
+    const next = { ...priceParameters(1, 2), factor_columns: ["new_factor", "other_factor"] };
+    const boundary = calls.length;
+    app.update({ parameters: next }); await app.settle();
+    assert.deepEqual(selected(), { 因子: "new_factor", 收益率: "P1L1", "IC 类型": "RankIC" });
+    assert.equal(created.length, 2); assert.equal(closed.length, 1);
+    assert.equal(app.nodes("DateRangeBar")[0].props.startDate, "2026-01-05");
+    assert.equal(app.nodes("DateRangeBar")[0].props.endDate, "2026-01-08");
+    assert.ok(calls.slice(boundary).filter((call) => call.factor).every((call) => call.factor === "new_factor"));
+    assert.ok(calls.slice(boundary).filter((call) => call.column).every((call) => call.column === "P1L1"));
+    assert.equal(reportElements(app.card("groups"), "EChart").length, 2);
+    assert.equal(reportElements(app.card("groups"), "TabsTrigger").length, 2, "orthogonal group ordering remains available");
+  } finally { app.close(); }
+});
+
+test("historical return metadata drives turnover mapping and missing actual periods never silently fall back", async () => {
+  const input = { factor_columns: ["legacy"], return_columns: ["r1", "r2", "custom_99", "return_3"],
+    return_specs: { ...laggedReturns(2).return_specs, custom_99: { kind: "log", periods: 1, turnover_period: 7 }, return_3: { kind: "simple", periods: 3 } }, n_groups: 2, n_select: 10 };
+  const { app, calls, choose } = syntheticReport(input);
+  try {
+    await app.settle();
+    assert.equal(calls.filter((call) => call.name === "turnover").at(-1).periods, 1);
+    choose("收益率", "r2"); await app.settle();
+    assert.equal(calls.filter((call) => call.name === "turnover").at(-1).periods, 2);
+    choose("收益率", "custom_99"); await app.settle();
+    assert.equal(calls.filter((call) => call.name === "turnover").at(-1).periods, 7);
+    const count = calls.filter((call) => call.name === "turnover").length;
+    choose("收益率", "return_3"); await app.settle();
+    assert.equal(calls.filter((call) => call.name === "turnover").length, count);
+    assert.equal(reportElements(app.card("turnover"), "EChart").length, 0);
+    assert.equal(reportElements(app.card("turnover"), "SeriesContent")[0].props.count, 0);
+  } finally { app.close(); }
+});
+
+test("stale factor/return queries are cancelled and late sessions close without overwriting a new report", async () => {
+  const pending = [], closed = [], calls = [];
+  let delayed = true;
+  const session = {
+    informationSeries(factor, column, range) {
+      calls.push({ factor, column, range });
+      const value = column.endsWith("2") ? 0.9 : 0.1;
+      const rows = [{ time: "2026-01-05", ic: value, rankIc: value, icCumulative: value, rankIcCumulative: value }];
+      if (range && delayed) return new Promise((resolve) => pending.push({ column, resolve: () => resolve(rows) }));
+      return Promise.resolve(rows);
+    },
+    async longShortSeries() { return []; }, async groupSeries() { return []; }, async groupStatistics() { return []; }, async decay() { return []; },
+    async turnoverPeriods() { return []; }, async executionStatistics() { return []; }, async close() { closed.push("session"); }
+  };
+  const api = { async outputs() { return []; }, async output() { return new ArrayBuffer(0); } };
+  const app = reportFixture("../src/components/panel/FactorAnalysisReport.tsx", {
+    "@/assets/lib/reports": { useReportApi: () => api },
+    "@/assets/lib/factorAnalysis": { FactorAnalytics: { create: async () => session } }
+  }, { parameters: priceParameters(1, 2), workflowInstanceId: 7 });
+  try {
+    await app.settle();
+    app.nodes("ReportSelect").find((node) => node.props.label === "收益率").props.onChange("P1L2"); await app.settle();
+    pending.find((query) => query.column === "P1L2").resolve(); await app.settle();
+    assert.equal(reportElements(app.card("information"), "EChart")[0].props.option.series[0].data[0], 0.9);
+    pending.find((query) => query.column === "P1L1").resolve(); await app.settle();
+    assert.equal(reportElements(app.card("information"), "EChart")[0].props.option.series[0].data[0], 0.9);
+    delayed = false;
+  } finally { app.close(); }
+  assert.equal(closed.length, 1);
+
+  const creations = [], lateClosed = [];
+  const late = reportFixture("../src/components/panel/FactorAnalysisReport.tsx", {
+    "@/assets/lib/reports": { useReportApi: () => api },
+    "@/assets/lib/factorAnalysis": { FactorAnalytics: { create: () => new Promise((resolve) => creations.push(resolve)) } }
+  }, { parameters: priceParameters(), workflowInstanceId: 7 });
+  try {
+    await late.settle();
+    late.update({ workflowInstanceId: 8 }); await late.settle();
+    assert.equal(creations.length, 2);
+    creations[0]({ async close() { lateClosed.push(7); } }); await late.settle();
+    assert.deepEqual(lateClosed, [7]);
+    creations[1](session); await late.settle();
+    assert.equal(late.nodes("ReportSelect").length, 3);
+  } finally { late.close(); }
+});
+
+test("ResearchReport removes its outer selector and keeps API identity stable across equivalent polling objects", () => {
+  const context = { Provider: "ReportProvider" }, apis = [];
+  const input = { kind: "factor", schemeVersion: "1.2.3", files: { group_returns: "/a/groups", information_coefficient: "/a/information" }, parameters: priceParameters(), annualTradingDays: 252, riskFreeRate: 0 };
+  const app = reportFixture("../src/components/panel/ResearchReport.tsx", {
+    "@/assets/lib/reports": { ReportContext: context, reportApi: (report) => { const api = { report }; apis.push(api); return api; } }
+  }, { report: input, workflowId: 7 });
+  try {
+    const original = app.tree.props.value;
+    assert.equal(app.nodes("Select").length, 0);
+    app.update({ report: { ...input, files: { information_coefficient: "/a/information", group_returns: "/a/groups" } } });
+    assert.equal(app.tree.props.value, original);
+    app.update({ report: { ...input, files: { ...input.files, group_returns: "/b/groups" } } });
+    assert.notEqual(app.tree.props.value, original);
+    assert.equal(apis.length, 2);
+  } finally { app.close(); }
+});
 
 for (const failure of ["download", "query"]) {
   test(`optional factor ${failure} errors stay in their cards and one-point main charts still render`, async () => {
@@ -299,7 +537,7 @@ for (const failure of ["download", "query"]) {
   });
 }
 
-for (const retry of ["factor", "dates", "period"]) {
+for (const retry of ["factor", "dates", "return"]) {
   test(`optional factor queries clear earlier errors when ${retry} changes start a new query`, async () => {
     const time = "2026-01-05";
     let fail = true, retryPending = false;
@@ -313,7 +551,7 @@ for (const retry of ["factor", "dates", "period"]) {
       async informationSeries() { return [{ time, ic: 0.2, rankIc: 0.3, icCumulative: 0.2, rankIcCumulative: 0.3 }]; },
       async longShortSeries() { return [{ time, value: 0.01, cumulative: 0.01 }]; },
       async groupSeries() { return []; }, async groupStatistics() { return []; }, async decay() { return []; },
-      turnoverPeriods() { return query("periods", [1, 2]); },
+      async turnoverPeriods() { return [1, 2]; },
       turnoverSummary() { return query("turnover", { periods: 1, rankAutocorrelation: 0.5, groups: [{ group: "Group 1", value: 0.2 }] }); },
       executionStatistics() { return query("statistics", [{ time, sourceCount: 10, filteredCount: 8, filters: [] }]); },
       async close() {}
@@ -322,34 +560,37 @@ for (const retry of ["factor", "dates", "period"]) {
     const app = reportFixture("../src/components/panel/FactorAnalysisReport.tsx", {
       "@/assets/lib/reports": { useReportApi: () => api },
       "@/assets/lib/factorAnalysis": { FactorAnalytics: { create: async () => session } }
-    }, { parameters: parameters(1), factor: "momentum_7", workflowInstanceId: 7 });
+    }, { parameters: { ...parameters(2), factor_columns: ["momentum_7", "momentum_8", "momentum_9"] }, workflowInstanceId: 7 });
     const content = (id) => reportElements(app.card(id), "SeriesContent")[0].props;
+    const choose = (label, value) => app.nodes("ReportSelect").find((node) => node.props.label === label).props.onChange(value);
     try {
       await app.settle();
-      assert.match(content("turnover").error, /periods failed/);
+      assert.match(content("turnover").error, /turnover failed/);
       assert.match(content("execution-statistics").error, /statistics failed/);
       fail = false;
-      app.update({ factor: "momentum_8" }); await app.settle();
+      choose("因子", "momentum_8");
+      app.nodes("DateRangeBar")[0].props.onRangeChange(time, "2026-01-06"); await app.settle();
       assert.equal(content("turnover").error, "");
       assert.equal(content("execution-statistics").error, "");
       assert.equal(reportElements(app.card("turnover"), "EChart").length, 1);
       assert.equal(reportElements(app.card("execution-statistics"), "EChart").length, 1);
       fail = true;
-      app.nodes("DateRangeBar")[0].props.onRangeChange(time, "2026-01-06"); await app.settle();
+      app.nodes("DateRangeBar")[0].props.onRangeChange(time, "2026-01-07"); await app.settle();
       assert.match(content("turnover").error, /turnover failed/);
       assert.match(content("execution-statistics").error, /statistics failed/);
       fail = false; retryPending = true;
-      if (retry === "factor") app.update({ factor: "momentum_9" });
-      else if (retry === "dates") app.nodes("DateRangeBar")[0].props.onRangeChange(time, "2026-01-07");
-      else reportElements(app.card("turnover"), "CardToolbar")[0].props.end.props.onValueChange("2");
+      if (retry === "factor") choose("因子", "momentum_9");
+      else if (retry === "dates") app.nodes("DateRangeBar")[0].props.onRangeChange(time, "2026-01-08");
+      else choose("收益率", "r2");
       await app.settle();
       assert.equal(content("turnover").error, "", "turnover errors clear before the retry resolves");
-      if (retry !== "period") assert.equal(content("execution-statistics").error, "", "statistics errors clear before the retry resolves");
+      if (retry === "dates") assert.equal(content("execution-statistics").error, "", "statistics errors clear before the date retry resolves");
+      else assert.match(content("execution-statistics").error, /statistics failed/, "dimension changes do not requery date-only statistics");
       retryPending = false;
       requests.splice(0).forEach((resolve) => resolve()); await app.settle();
       assert.equal(content("turnover").error, "");
       assert.equal(reportElements(app.card("turnover"), "EChart").length, 1);
-      if (retry !== "period") assert.equal(reportElements(app.card("execution-statistics"), "EChart").length, 1);
+      if (retry === "dates") assert.equal(reportElements(app.card("execution-statistics"), "EChart").length, 1);
     } finally { app.close(); }
   });
 }

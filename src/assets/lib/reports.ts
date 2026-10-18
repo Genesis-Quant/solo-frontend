@@ -3,7 +3,7 @@ import type { ProjectKind, ResearchVersion } from "@/types/research";
 import type { FactorReportParameters } from "@/types/factor";
 import { apiUrl } from "./settings";
 import { schemeMajor, supportsScheme } from "./scheme";
-import { laggedReturns } from "./factorReturns";
+import { laggedReturns, priceReturns } from "./factorReturns";
 
 export type ReportProjectKind = ProjectKind | "strategy";
 
@@ -49,9 +49,13 @@ function readV1(input: Record<string, unknown>, files: Record<string, string>, s
     const analysis = object(input.analysis);
     if (!Array.isArray(analysis.columns) || !analysis.columns.length || !analysis.columns.every((s) => typeof s === "string" && s)) throw new Error("报告缺少因子列");
     const hasMaxLag = Object.hasOwn(analysis, "max_lag");
-    if (hasMaxLag && Object.hasOwn(analysis, "return_periods")) throw new Error("报告 max_lag 与 return_periods 不能同时提供");
+    const hasPriceReturns = Object.hasOwn(analysis, "period") || Object.hasOwn(analysis, "price_column");
+    if ((hasMaxLag || hasPriceReturns) && Object.hasOwn(analysis, "return_periods")) throw new Error("报告 max_lag / period / price_column 与 return_periods 不能同时提供");
     let returns: Pick<FactorReportParameters, "return_columns" | "return_specs">;
-    if (hasMaxLag) {
+    if (hasPriceReturns) {
+      // 任一新字段出现就校验完整新契约，不能静默退回历史收益列。
+      returns = priceReturns(analysis.period, analysis.price_column, analysis.max_lag);
+    } else if (hasMaxLag) {
       returns = laggedReturns(analysis.max_lag);
     } else {
       // 旧清单仍表示多日收盘到收盘收益，不转换为新的隔夜 / 日内标签。

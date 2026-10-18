@@ -1,4 +1,27 @@
-import type { FactorReportParameters, FactorReturnSpec } from "@/types/factor";
+import type { FactorPriceColumn, FactorReportParameters, FactorReturnSpec } from "@/types/factor";
+
+type ReturnParameters = Pick<FactorReportParameters, "return_columns" | "return_specs">;
+const priceColumns: readonly FactorPriceColumn[] = ["open", "close", "open_hfq", "close_hfq"];
+
+function positiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 1;
+}
+
+function priceColumn(value: unknown): value is FactorPriceColumn {
+  return priceColumns.includes(value as FactorPriceColumn);
+}
+
+/** 同一价格列在 t+k 入场、t+k+period 出场；lag 不代表收益跨度。 */
+export function priceReturns(period: unknown, price: unknown, maxLag: unknown): ReturnParameters {
+  if (!positiveInteger(period)) throw new Error("报告 period 必须为正整数");
+  if (!priceColumn(price)) throw new Error("报告 price_column 仅支持 open、close、open_hfq、close_hfq");
+  if (!positiveInteger(maxLag)) throw new Error("报告 max_lag 必须为正整数");
+  const entries = Array.from({ length: maxLag }, (_, index): [string, FactorReturnSpec] => [
+    `P${period}L${index + 1}`,
+    { kind: "simple", periods: period, lag: index + 1, price_column: price, turnover_period: period }
+  ]);
+  return { return_columns: entries.map(([column]) => column), return_specs: Object.fromEntries(entries) };
+}
 
 /** lag 表示标签位置；每列均为单段收益，不能用 lag 代替 periods。 */
 export function laggedReturns(maxLag: unknown): Pick<FactorReportParameters, "return_columns" | "return_specs"> {
@@ -13,9 +36,17 @@ export function laggedReturns(maxLag: unknown): Pick<FactorReportParameters, "re
   return { return_columns: entries.map(([column]) => column), return_specs: Object.fromEntries(entries) };
 }
 
-/** metadata 可省略；已提供的时段信息仍需遵循单段收益口径。 */
-export function returnMetadata(column: string, spec: Record<string, unknown>): Pick<FactorReturnSpec, "lag" | "session" | "turnover_period"> {
+/** 仅显式 metadata 决定收益口径；新的价格规格不依赖列名猜测持有期。 */
+export function returnMetadata(column: string, spec: Record<string, unknown>): Pick<FactorReturnSpec, "lag" | "price_column" | "session" | "turnover_period"> {
   const { lag, session, turnover_period: turnoverPeriod } = spec;
+  if (Object.hasOwn(spec, "price_column")) {
+    if (spec.kind !== "simple" || !positiveInteger(spec.periods) || !positiveInteger(lag)
+      || !priceColumn(spec.price_column) || Object.hasOwn(spec, "session")
+      || turnoverPeriod !== undefined && !positiveInteger(turnoverPeriod)) {
+      throw new Error("报告价格收益规格无效：需要 simple、正整数 periods / lag 和合法 price_column");
+    }
+    return { lag, price_column: spec.price_column, ...(turnoverPeriod !== undefined ? { turnover_period: turnoverPeriod as number } : {}) };
+  }
   if ((lag !== undefined || session !== undefined) && (spec.kind !== "simple" || spec.periods !== 1)
     || lag !== undefined && (typeof lag !== "number" || !Number.isSafeInteger(lag) || lag < 0)
     || session !== undefined && session !== "overnight" && session !== "intraday"
