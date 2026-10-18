@@ -199,16 +199,29 @@ export class FactorAnalytics {
 
   private effectiveReturns(returnColumn: string, sources: string[], spread = false) {
     const spec = this.parameters.return_specs[returnColumn];
-    const normalized = sources.map((source) => spec.kind === "simple" ? `ln(1 + ${source})` : source);
+    if (spec.kind === "simple" && spec.periods > 1 && !this.turnoverFile) {
+      throw new Error("报告缺少完整交易日历，无法计算多期收益；请提供 group_turnover 数据");
+    }
+    const normalized = sources.map((source) => spec.kind === "simple"
+      ? `CASE WHEN isfinite(${source}) AND ${source} > -1 THEN ln(1 + ${source}) ELSE NULL END`
+      : source);
     const raw = spread ? [`${normalized[0]} - ${normalized[1]}`] : normalized;
     const window = `ORDER BY time ROWS BETWEEN ${spec.periods - 1} PRECEDING AND CURRENT ROW`;
-    // The backend supplies every trading row. Keep NULLs in each expanding / P-row
-    // window and compute it before date selection; never re-window reversed curves.
-    return `WITH raw_returns AS (
-      SELECT time, ${raw.map((source, index) => `${source} AS raw_${index}`).join(", ")}
-      FROM read_parquet(${literal(this.groupsFile)})
+    // Legacy group tables omit empty cross sections; turnover preserves their trading dates.
+    const calendar = this.turnoverFile
+      ? `trade_dates AS (
+        SELECT time FROM read_parquet(${literal(this.turnoverFile)})
+        UNION SELECT time FROM read_parquet(${literal(this.groupsFile)})
+      ), `
+      : "";
+    const source = this.turnoverFile
+      ? `trade_dates LEFT JOIN read_parquet(${literal(this.groupsFile)}) USING (time)`
+      : `read_parquet(${literal(this.groupsFile)})`;
+    return `WITH ${calendar}raw_returns AS (
+      SELECT time, ${raw.map((column, index) => `${column} AS raw_${index}`).join(", ")}
+      FROM ${source}
     ), effective_returns AS (
-      SELECT time, ${raw.map((_source, index) => `CASE WHEN count(raw_${index}) OVER (${window}) = count(*) OVER (${window}) THEN avg(raw_${index}) OVER (${window}) ELSE NULL END AS value_${index}`).join(", ")}
+      SELECT time, ${raw.map((_column, index) => `CASE WHEN count(raw_${index}) OVER (${window}) = count(*) OVER (${window}) THEN avg(raw_${index}) OVER (${window}) ELSE NULL END AS value_${index}`).join(", ")}
       FROM raw_returns
     )`;
   }

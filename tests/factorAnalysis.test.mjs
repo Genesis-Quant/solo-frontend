@@ -65,7 +65,8 @@ test("current log labels reach SQL verbatim, stay independent, and keep all deca
     assert.match(queries.at(-1), /sum\(value\) OVER/);
     assert.doesNotMatch(queries.at(-1), /exp\(|product\(/);
     await session.groupSeries(factor, column, input.n_groups);
-    assert.ok(queries.at(-1).includes(`"${factor}_${column}_group0" AS raw_1`));
+    assert.ok(queries.at(-1).includes(`"${factor}_${column}_group0"`), "selected group sources survive calendar CTEs and normalization guards");
+    assert.match(queries.at(-1), /\bAS raw_1\b/);
     assert.match(queries.at(-1), /exp\(sum\(value_1\) OVER/);
     assert.doesNotMatch(queries.at(-1), /ln\(|product\(/);
     for (const other of input.return_columns.filter((other) => other !== column)) assert.ok(!queries.at(-1).includes(`_${other}_`));
@@ -116,7 +117,20 @@ const rawLogReturns = [
   [null, null, null, null], [null, null, null, null]
 ];
 
-async function duckDbFixture(input) {
+function turnoverCalendar(dates = tradingDates) {
+  return dates.flatMap((time) => ["factor_a", "unselected_factor"].flatMap((factor) =>
+    [1, 2, 5].map((periods) => ({ time, factor, periods }))));
+}
+function doubleLiteral(value) {
+  if (value === null) return "NULL";
+  if (Number.isNaN(value)) return "'NaN'::DOUBLE";
+  if (value === Infinity) return "'Infinity'::DOUBLE";
+  if (value === -Infinity) return "'-Infinity'::DOUBLE";
+  assert.ok(typeof value === "number" && Number.isFinite(value), `invalid fixture DOUBLE: ${value}`);
+  return String(value);
+}
+
+async function duckDbFixture(input, { sourceRows = {}, groupDates = tradingDates, turnoverRows = null } = {}) {
   const duckdb = require("@duckdb/duckdb-wasm/blocking");
   const modulePath = (variant) => fileURLToPath(new URL(`../node_modules/@duckdb/duckdb-wasm/dist/duckdb-${variant}.wasm`, import.meta.url));
   const db = await duckdb.createDuckDB({ mvp: { mainModule: modulePath("mvp") }, eh: { mainModule: modulePath("eh") } }, new duckdb.VoidLogger(), duckdb.NODE_RUNTIME);
@@ -133,26 +147,44 @@ async function duckDbFixture(input) {
         if (value === null || lag === 3 && index === 0 && group === 1 || lag === 2 && index === 2 && group === 0) return null;
         return value * (1 + (lag - 1) / 2) + (lag - 1) * (group % 2 ? -0.009 : 0.007) + factorIndex * 0.002 * group;
       }));
+      const sources = sourceRows[`${factor}_${column}`] ?? raw[`${factor}_${column}`].map((row) =>
+        row.map((value) => value === null ? null : spec.kind === "simple" ? Math.expm1(value) : value));
+      assert.equal(sources.length, tradingDates.length, "source fixture rows align with the trading calendar");
       for (const [group, suffix] of ["bottom", "group0", "group1", "top"].entries()) columns.push({
         name: `${factor}_${column}_${suffix}`,
-        values: raw[`${factor}_${column}`].map((row) => row[group] === null ? null : spec.kind === "simple" ? Math.expm1(row[group]) : row[group])
+        values: sources.map((row) => row[group])
       });
       informationColumns.push(`${factor}_${column}_ic`, `${factor}_${column}_rank_ic`);
     }
     connection.query(`CREATE TABLE returns (time DATE, ${columns.map(({ name }) => `"${name}" DOUBLE`).join(", ")})`);
-    connection.query(`INSERT INTO returns VALUES ${tradingDates.map((time, index) => `('${time}', ${columns.map(({ values }) => values[index] === null ? "NULL" : values[index]).join(", ")})`).join(", ")}`);
+    if (groupDates.length) connection.query(`INSERT INTO returns VALUES ${groupDates.map((time) => {
+      const index = tradingDates.indexOf(time);
+      assert.ok(index >= 0, `unknown fixture trading date ${time}`);
+      return `('${time}', ${columns.map(({ values }) => doubleLiteral(values[index])).join(", ")})`;
+    }).join(", ")}`);
+    if (turnoverRows !== null) {
+      connection.query("CREATE TABLE turnover (time DATE, factor VARCHAR, periods INTEGER)");
+      if (turnoverRows.length) connection.query(`INSERT INTO turnover VALUES ${turnoverRows.map(({ time, factor, periods }) =>
+        `('${time}', '${factor}', ${periods})`).join(", ")}`);
+    }
     connection.query(`CREATE TABLE information (time DATE, ${informationColumns.map((column) => `"${column}" DOUBLE`).join(", ")})`);
     connection.query(`INSERT INTO information VALUES ${tradingDates.map((time, index) => `('${time}', ${informationColumns.map((_column, columnIndex) => index === 6 ? "NULL" : (columnIndex + 1) / 100).join(", ")})`).join(", ")}`);
     const { FactorAnalytics } = load("../src/assets/lib/factorAnalysis.ts", {
       "@/assets/lib/duckdb": { BrowserDuckDb: { create: async () => ({
         async rows(sql) {
           queries.push(sql);
-          return connection.query(sql.replaceAll("read_parquet('factor-7-groups.parquet')", "returns").replaceAll("read_parquet('factor-7-information.parquet')", "information")).toArray().map((row) => row.toJSON());
+          return connection.query(sql
+            .replaceAll("read_parquet('factor-7-groups.parquet')", "returns")
+            .replaceAll("read_parquet('factor-7-information.parquet')", "information")
+            .replaceAll("read_parquet('factor-7-turnover.parquet')", "turnover")).toArray().map((row) => row.toJSON());
         },
         async close() {}
       }) }, duckDbDateValue: (value) => new Date(Number(value)).toISOString().slice(0, 10) }
     });
-    const session = await FactorAnalytics.create(7, { information: new ArrayBuffer(0), groups: new ArrayBuffer(0) }, input);
+    const session = await FactorAnalytics.create(7, {
+      information: new ArrayBuffer(0), groups: new ArrayBuffer(0),
+      ...(turnoverRows !== null ? { turnover: new ArrayBuffer(0) } : {})
+    }, input);
     return { session, raw, queries, close() { connection.close(); db.reset(); } };
   } catch (reason) { connection.close(); db.reset(); throw reason; }
 }
@@ -196,6 +228,30 @@ function checkGroupStatistics(statistics, effective) {
       close(row.pValue, statistic === null ? null : 2 * (1 - studentTCdf(statistic, values.length - 1)));
     }
   }
+}
+
+// Run the real FactorAnalytics SQL; only expected values reuse the established numeric helpers.
+async function checkEffectiveReturnQueries(session, factor, column, dates, raw, periods, selection = null) {
+  const [start, end] = selection ?? [0, dates.length - 1];
+  const range = selection ? { start: dates[start], end: dates[end] } : undefined;
+  const selectedDates = dates.slice(start, end + 1);
+  const spread = raw.map((row) => row[0] === null || row[3] === null ? null : row[3] - row[0]);
+  const effective = effectiveValues(spread, periods).slice(start, end + 1);
+  const rows = await session.longShortSeries(factor, column, range);
+  assert.deepEqual(Array.from(rows, (row) => row.time), selectedDates, "calendar dates are neither dropped nor duplicated");
+  closeValues(Array.from(rows, (row) => row.value), effective);
+  closeValues(Array.from(rows, (row) => row.cumulative), cumulativeValues(effective));
+  const groups = await session.groupSeries(factor, column, 2, range);
+  assert.deepEqual(Array.from(groups, (row) => row.time), selectedDates);
+  const groupEffective = groupLabels.map((_label, group) => effectiveValues(raw.map((row) => row[group]), periods).slice(start, end + 1));
+  for (const [group, label] of groupLabels.entries()) {
+    closeValues(Array.from(groups, (row) => row.values[label]), cumulativeValues(groupEffective[group], false, true));
+    closeValues(Array.from(groups, (row) => row.reverseValues[label]), cumulativeValues(groupEffective[group], true, true));
+  }
+  const statistics = await session.groupStatistics(factor, column, 2, range);
+  assert.equal(statistics.length, groupLabels.length);
+  checkGroupStatistics(statistics, groupEffective);
+  return { rows, groups, statistics };
 }
 
 for (const period of [1, 2, 5]) {
@@ -272,7 +328,7 @@ for (const period of [1, 2, 5]) {
 
 test("DuckDB simple metadata normalizes each source with ln(1+source) before the same P2 spread/window/statistics flow", async () => {
   const input = { factor_columns: ["factor_a"], return_columns: ["custom_99"], return_specs: { custom_99: { kind: "simple", periods: 2 } }, n_groups: 2, n_select: 10 };
-  const fixture = await duckDbFixture(input);
+  const fixture = await duckDbFixture(input, { turnoverRows: turnoverCalendar() });
   try {
     const raw = fixture.raw.factor_a_custom_99;
     const effective = effectiveValues(raw.map((row) => row[0] === null || row[3] === null ? null : row[3] - row[0]), 2);
@@ -286,6 +342,106 @@ test("DuckDB simple metadata normalizes each source with ln(1+source) before the
       closeValues(Array.from(groups, (row) => row.reverseValues[label]), cumulativeValues(groupEffective[group], true, true));
     }
     checkGroupStatistics(await fixture.session.groupStatistics("factor_a", "custom_99", 2), groupEffective);
+  } finally { fixture.close(); }
+});
+
+for (const period of [1, 2, 5]) {
+  test(`DuckDB simple P${period} guards -1, below -1, NULL, NaN and infinities; gaps expire in all three queries`, async () => {
+    const input = { factor_columns: ["factor_a"], return_columns: ["legacy"], return_specs: { legacy: { kind: "simple", periods: period } }, n_groups: 2, n_select: 10 };
+    const sources = tradingDates.map((_time, index) => groupLabels.map((_label, group) =>
+      Math.expm1((((index + 1) * (group + 2)) % 11 - 5) * 0.007 + group * 0.002)));
+    const invalid = [[2, 0, -1], [3, 3, -1.25], [4, 1, null], [5, 2, NaN], [6, 0, Infinity], [7, 3, -Infinity]];
+    for (const [index, group, value] of invalid) sources[index][group] = value;
+    const raw = sources.map((row) => row.map((value) => Number.isFinite(value) && value > -1 ? Math.log1p(value) : null));
+    const fixture = await duckDbFixture(input, { sourceRows: { factor_a_legacy: sources }, turnoverRows: turnoverCalendar() });
+    try {
+      const full = await checkEffectiveReturnQueries(fixture.session, "factor_a", "legacy", tradingDates, raw, period);
+      for (const [index, group] of invalid) for (let offset = 0; offset < period; offset++) {
+        assert.equal(full.groups[index + offset].values[groupLabels[group]], null, "invalid simple samples leave forward NAV gaps");
+        assert.equal(full.groups[index + offset].reverseValues[groupLabels[group]], null, "reverse NAV uses the same invalid effective window");
+        if (group === 0 || group === 3) assert.equal(full.rows[index + offset].value, null, "invalid endpoints invalidate the spread window");
+      }
+      for (const [group, lastInvalid] of [[0, 6], [1, 4], [2, 5], [3, 7]]) {
+        assert.notEqual(full.groups[lastInvalid + period].values[groupLabels[group]], null, "forward NAV recovers when the last invalid sample leaves the window");
+        assert.notEqual(full.groups[lastInvalid + period].reverseValues[groupLabels[group]], null, "reverse NAV recovers on the same effective sample");
+      }
+      assert.notEqual(full.rows[7 + period].value, null, "LS recovers after its last invalid endpoint leaves the window");
+      assert.ok(full.statistics.every((row) => row.mean !== null && row.pValue !== null), "valid samples still produce means and p-values");
+      for (const selection of [[3, 12], [8, 15]]) {
+        const selected = await checkEffectiveReturnQueries(fixture.session, "factor_a", "legacy", tradingDates, raw, period, selection);
+        assert.deepEqual(Array.from(selected.rows, (row) => row.value), Array.from(full.rows.slice(selection[0], selection[1] + 1), (row) => row.value), "date filtering occurs after the full trading-row window");
+      }
+    } finally { fixture.close(); }
+  });
+}
+
+test("DuckDB legacy simple P2 restores missing Tuesday from duplicate multi-factor turnover dates without adding weekends", async () => {
+  const input = { factor_columns: ["factor_a"], return_columns: ["legacy"], return_specs: { legacy: { kind: "simple", periods: 2 } }, n_groups: 2, n_select: 10 };
+  const groupDates = tradingDates.filter((_time, index) => index !== 1);
+  // Friday is present only in groups; Tuesday is present only in turnover and under an unselected factor/period.
+  const turnoverRows = turnoverCalendar(tradingDates.filter((_time, index) => index !== 1 && index !== 4));
+  turnoverRows.push(...Array.from({ length: 3 }, () => ({ time: tradingDates[1], factor: "unselected_factor", periods: 7 })));
+  const fixture = await duckDbFixture(input, { groupDates, turnoverRows });
+  try {
+    const raw = fixture.raw.factor_a_legacy.map((row, index) => index === 1 ? groupLabels.map(() => null) : row);
+    const full = await checkEffectiveReturnQueries(fixture.session, "factor_a", "legacy", tradingDates, raw, 2);
+    for (const index of [1, 2]) {
+      assert.equal(full.rows[index].value, null, "missing Tuesday invalidates Tuesday and Wednesday instead of compressing Monday/Wednesday");
+      for (const label of groupLabels) {
+        assert.equal(full.groups[index].values[label], null);
+        assert.equal(full.groups[index].reverseValues[label], null);
+      }
+    }
+    close(full.rows[3].value, ((raw[2][3] - raw[2][0]) + (raw[3][3] - raw[3][0])) / 2);
+    close(full.groups[3].values[groupLabels[0]], Math.exp(raw[0][0] + (raw[2][0] + raw[3][0]) / 2));
+    assert.equal(full.rows[4].time, "2026-01-09", "UNION retains group dates absent from turnover");
+    close(full.rows[5].value, ((raw[4][3] - raw[4][0]) + (raw[5][3] - raw[5][0])) / 2);
+    assert.equal(full.rows[5].time, "2026-01-12", "Friday/Monday are consecutive trading rows, without Saturday/Sunday");
+    for (const selection of [[2, 5], [3, 12]]) {
+      const selected = await checkEffectiveReturnQueries(fixture.session, "factor_a", "legacy", tradingDates, raw, 2, selection);
+      closeValues(Array.from(selected.rows, (row) => row.value), Array.from(full.rows.slice(selection[0], selection[1] + 1), (row) => row.value));
+    }
+  } finally { fixture.close(); }
+});
+
+test("DuckDB log P5 also uses turnover's complete trading calendar before windows, ranges and reverse NAVs", async () => {
+  const input = { ...priceParameters(5, 1), factor_columns: ["factor_a"] };
+  const fixture = await duckDbFixture(input, {
+    groupDates: tradingDates.filter((_time, index) => index !== 1),
+    turnoverRows: turnoverCalendar(tradingDates.filter((_time, index) => index !== 4))
+  });
+  try {
+    const raw = fixture.raw.factor_a_P5L1.map((row, index) => index === 1 ? groupLabels.map(() => null) : row);
+    const full = await checkEffectiveReturnQueries(fixture.session, "factor_a", "P5L1", tradingDates, raw, 5);
+    for (let index = 1; index <= 5; index++) assert.equal(full.rows[index].value, null);
+    assert.notEqual(full.rows[11].value, null, "the missing row and the existing NULL have both left the P5 window");
+    await checkEffectiveReturnQueries(fixture.session, "factor_a", "P5L1", tradingDates, raw, 5, [3, 17]);
+  } finally { fixture.close(); }
+});
+
+test("DuckDB simple multi-period queries reject missing group_turnover instead of compressing sparse groups", async () => {
+  const input = { factor_columns: ["factor_a"], return_columns: ["legacy2", "legacy5"],
+    return_specs: { legacy2: { kind: "simple", periods: 2 }, legacy5: { kind: "simple", periods: 5 } }, n_groups: 2, n_select: 10 };
+  const fixture = await duckDbFixture(input, { groupDates: tradingDates.filter((_time, index) => index !== 1) });
+  try {
+    for (const column of input.return_columns) for (const method of ["longShortSeries", "groupSeries", "groupStatistics"]) {
+      await assert.rejects(() => fixture.session[method]("factor_a", column, ...(method === "longShortSeries" ? [] : [2])), {
+        message: "报告缺少完整交易日历，无法计算多期收益；请提供 group_turnover 数据"
+      });
+    }
+    assert.equal(fixture.queries.length, 0, "missing-calendar errors are explicit and raised before submitting SQL");
+  } finally { fixture.close(); }
+});
+
+test("DuckDB simple P1 without turnover remains valid on its available group dates", async () => {
+  const input = { factor_columns: ["factor_a"], return_columns: ["legacy"], return_specs: { legacy: { kind: "simple", periods: 1 } }, n_groups: 2, n_select: 10 };
+  const groupDates = tradingDates.filter((_time, index) => index !== 1);
+  const fixture = await duckDbFixture(input, { groupDates });
+  try {
+    const raw = fixture.raw.factor_a_legacy.filter((_row, index) => index !== 1);
+    const full = await checkEffectiveReturnQueries(fixture.session, "factor_a", "legacy", groupDates, raw, 1);
+    assert.equal(full.rows[1].time, "2026-01-07", "P1 does not require or invent a complete multi-period calendar");
+    assert.notEqual(full.rows[1].value, null);
   } finally { fixture.close(); }
 });
 

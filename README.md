@@ -57,7 +57,7 @@ http://127.0.0.1:5174/embed/report?source=jupyter&path=projects/factor/X/reports
 {
   "protocol": 1,
   "format": "solo-notebook-report",
-  "schemeVersion": "1.2.3",
+  "schemeVersion": "1.10.0",
   "kind": "factor",
   "theme": "light",
   "annualTradingDays": 252,
@@ -84,7 +84,7 @@ http://127.0.0.1:5174/embed/report?source=jupyter&path=projects/factor/X/reports
 
 清单未提供 `theme` 时使用 `light`。回测的 `annualTradingDays` 默认 252，显式提供时必须为正整数；`riskFreeRate` 默认 0，显式提供时必须有限。因子报告固定使用 252 个年交易日和零无风险利率。`parameters` 仅用于 factor，因子列和收益列非空且不重复；当前各收益列使用 `log` 规格及正整数 `periods`，额外规格忽略。分组数及选股数为正整数。历史 `return_1` 等收盘到收盘收益、历史 `r0o` / `r1` 等隔夜 / 日内收益保持原规格，不混为当前 `P{period}L{k}` 同价 log 收益。任意自定义收益列名都依赖显式 metadata，`custom_99` 不代表 99 日。规格中出现 `price_column` 即采用完整价格契约校验：`kind` 必须为 `simple` 或 `log`、`periods` / `lag` 为正整数、价格为四种合法字段之一，不允许混入旧 `session`；显式规格保留原收益类型。任务报告按实际 Scheme 版本识别：1.10 起为 `log`，1.8/1.9 为 `simple`，不将已有数据误标。未使用新价格 metadata 的既有 `simple` / `log` 及可选旧时段信息继续支持。
 
-各分组 raw 收益是当日有效 log 标签的加权均值，IC/RankIC 使用当日因子与原始 log 标签，不平滑。报告为每个因子、收益列和分组计算 `effective(t)=mean(raw(t),...,raw(t-period+1))`：当前及前 `period-1` 个交易期 raw log 收益的算术平均，开头不足 period 时使用已有样本，不额外除以 period，不平均不同 lag。先补齐完整交易日轴，缺失日期保留 NULL；窗口中任一 raw 为 NULL，则当期 effective 为 NULL，不跳过缺失。日期选择先在报告全表上计算窗口再截取，不在所选起点重启；`period=1` 使用同一规则。
+各分组 raw 收益是当日有效 log 标签的加权均值，IC/RankIC 使用当日因子与原始 log 标签，不平滑。报告为每个因子、收益列和分组计算 `effective(t)=mean(raw(t),...,raw(t-period+1))`：当前及前 `period-1` 个交易期 raw log 收益的算术平均，开头不足 period 时使用已有样本，不额外除以 period，不平均不同 lag。先补齐完整交易日轴，缺失日期保留 NULL；窗口中任一 raw 为 NULL，则当期 effective 为 NULL，不跳过缺失。日期选择先在报告全表上计算窗口再截取，不在所选起点重启；`period=1` 使用同一规则。历史 `simple` raw 收益先转为 `ln(1+r)`，`r<=-1` 或非有限值转为 NULL。旧 `simple` 多期收益须用 `group_turnover` 的完整交易日轴补 NULL，缺少该可靠日历则明确报“缺少完整交易日历”，不按已有行压缩；新版 `log` 的后端 `group_returns` 本身已有完整交易日历，没有 `group_turnover` 仍支持。
 
 分组净值为 `exp(cumsum(effective))`；多空先取同日 `high-low` raw log 收益，再使用同一窗口及 NULL 规则。时序 `value=effective` 为 log，`cumulative=cumsum(effective)` 为 logsum，不是简单收益或净值。均值、年化、波动率和 Sharpe 使用同一有效序列的非 NULL 观测：均值为 logmean，年化为 `logmean*252`，波动率为 `std(effective)*sqrt(252)`，Sharpe 为 `logmean/std(effective)*sqrt(252)`。所有 period 统一展示曲线与统计，不按持有期另设显示限制；NULL 日期保留曲线断点，不补零，不可定义的指标保留 NULL。
 
