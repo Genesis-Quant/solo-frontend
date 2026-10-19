@@ -68,9 +68,9 @@ export class FactorAnalytics {
     const low = identifier(lowColumn);
     const high = identifier(highColumn);
     const rows = await this.rows(`
-      ${this.effectiveReturns(returnColumn, [high, low], true)},
+      ${this.collectionReturns(returnColumn, [high, low], true)},
       selected AS (
-        SELECT time, value_0 AS value FROM effective_returns ${dateFilter(range)}
+        SELECT time, value_0 AS value FROM collection_returns ${dateFilter(range)}
       )
       SELECT time, value,
         CASE WHEN value IS NULL THEN NULL ELSE sum(value) OVER (ORDER BY time ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) END AS cumulative
@@ -91,8 +91,8 @@ export class FactorAnalytics {
       });
     });
     const rows = await this.rows(`
-      ${this.effectiveReturns(returnColumn, definitions.map((definition) => identifier(definition.column)))},
-      selected AS (SELECT * FROM effective_returns ${dateFilter(range)})
+      ${this.collectionReturns(returnColumn, definitions.map((definition) => identifier(definition.column)))},
+      selected AS (SELECT * FROM collection_returns ${dateFilter(range)})
       SELECT time, ${columns.join(", ")} FROM selected ORDER BY time
     `);
     return rows.map((row) => ({
@@ -109,8 +109,8 @@ export class FactorAnalytics {
       return `SELECT ${literal(definition.label)} AS group_name, count(${source}) AS observations, avg(${source}) AS mean, stddev_samp(${source}) AS std FROM selected`;
     });
     const rows = await this.rows(`
-      ${this.effectiveReturns(returnColumn, definitions.map((definition) => identifier(definition.column)))},
-      selected AS (SELECT * FROM effective_returns ${dateFilter(range)})
+      ${this.collectionReturns(returnColumn, definitions.map((definition) => identifier(definition.column)))},
+      selected AS (SELECT * FROM collection_returns ${dateFilter(range)})
       ${statements.join(" UNION ALL ")}
     `);
     return rows.map((row) => {
@@ -197,7 +197,7 @@ export class FactorAnalytics {
     return this.database.rows(sql);
   }
 
-  private effectiveReturns(returnColumn: string, sources: string[], spread = false) {
+  private collectionReturns(returnColumn: string, sources: string[], spread = false) {
     const spec = this.parameters.return_specs[returnColumn];
     if (spec.kind === "simple" && spec.periods > 1 && !this.turnoverFile) {
       throw new Error("报告缺少完整交易日历，无法计算多期收益；请提供 group_turnover 数据");
@@ -206,7 +206,6 @@ export class FactorAnalytics {
       ? `CASE WHEN isfinite(${source}) AND ${source} > -1 THEN ln(1 + ${source}) ELSE NULL END`
       : source);
     const raw = spread ? [`${normalized[0]} - ${normalized[1]}`] : normalized;
-    const window = `ORDER BY time ROWS BETWEEN ${spec.periods - 1} PRECEDING AND CURRENT ROW`;
     // Legacy group tables omit empty cross sections; turnover preserves their trading dates.
     const calendar = this.turnoverFile
       ? `trade_dates AS (
@@ -218,11 +217,16 @@ export class FactorAnalytics {
       ? `trade_dates LEFT JOIN read_parquet(${literal(this.groupsFile)}) USING (time)`
       : `read_parquet(${literal(this.groupsFile)})`;
     return `WITH ${calendar}raw_returns AS (
-      SELECT time, ${raw.map((column, index) => `${column} AS raw_${index}`).join(", ")}
+      SELECT time,
+        (row_number() OVER (ORDER BY time) - 1) // ${spec.periods} AS collection_id,
+        ${raw.map((column, index) => `${column} AS raw_${index}`).join(", ")}
       FROM ${source}
-    ), effective_returns AS (
-      SELECT time, ${raw.map((_column, index) => `CASE WHEN count(raw_${index}) OVER (${window}) = count(*) OVER (${window}) THEN avg(raw_${index}) OVER (${window}) ELSE NULL END AS value_${index}`).join(", ")}
+    ), collection_returns AS (
+      SELECT max(time) AS time,
+        ${raw.map((_column, index) => `CASE WHEN count(raw_${index}) = ${spec.periods} THEN avg(raw_${index}) ELSE NULL END AS value_${index}`).join(", ")}
       FROM raw_returns
+      GROUP BY collection_id
+      HAVING count(*) = ${spec.periods}
     )`;
   }
 }

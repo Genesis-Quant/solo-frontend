@@ -1,5 +1,14 @@
 export type TaskLogLevel = "TRACE" | "DEBUG" | "INFO" | "SUCCESS" | "WARNING" | "ERROR" | "CRITICAL" | "SYSTEM";
 export type TaskLogFormat = "dolphinscheduler" | "loguru" | "traceback" | "plain";
+export type TaskLogThreshold = "TRACE" | "DEBUG" | "INFO" | "WARNING" | "ERROR";
+
+const LEVEL_PRIORITY: Record<TaskLogLevel, number> = {
+  TRACE: 10, DEBUG: 20, INFO: 30, SUCCESS: 35, WARNING: 40, ERROR: 50, CRITICAL: 60, SYSTEM: 100
+};
+
+export function filterTaskLog(lines: ParsedTaskLogLine[], threshold: TaskLogThreshold) {
+  return lines.filter((line) => line.level === null || LEVEL_PRIORITY[line.level] >= LEVEL_PRIORITY[threshold]);
+}
 
 export type ParsedTaskLogLine = {
   file: string | null;

@@ -346,7 +346,7 @@ export default function FactorAnalysisReport({ chartRanges, onChartRanges, param
         {
           id: "returns",
           content: <ReportCard title="收益分析">
-            <MetricGrid items={returnMetrics(longShort)} />
+            <MetricGrid items={returnMetrics(longShort, returnSpec.periods)} />
             <ChartPanel title="多空对数收益与累计对数收益">
               <SeriesContent loading={returnLoading} count={longShort.length} height={350}>{longShort.length > 0 && <EChart option={longShortOption(longShort, theme, chartRanges?.longShort)} height={350} />}</SeriesContent>
             </ChartPanel>
@@ -449,11 +449,12 @@ function informationMetrics(rows: InformationPoint[], type: IcType): DisplayMetr
   ];
 }
 
-function returnMetrics(rows: LongShortPoint[]): DisplayMetric[] {
+function returnMetrics(rows: LongShortPoint[], periods = 1): DisplayMetric[] {
   const values = rows.map((row) => row.value).filter((value): value is number => value !== null);
   const cumulative = rows.reduce<number | null>((current, row) => row.cumulative ?? current, null);
-  const annualReturn = cumulative === null || !values.length ? null : cumulative * 252 / values.length;
-  const annualVolatility = values.length ? standardDeviation(values) * Math.sqrt(252) : null;
+  const annualPeriods = 252 / periods;
+  const annualReturn = cumulative === null || !values.length ? null : cumulative * annualPeriods / values.length;
+  const annualVolatility = values.length ? standardDeviation(values) * Math.sqrt(annualPeriods) : null;
   return [
     { label: "多空累计对数收益", value: format(cumulative, "percent") },
     { label: "多空年化对数收益", value: format(annualReturn, "percent") },

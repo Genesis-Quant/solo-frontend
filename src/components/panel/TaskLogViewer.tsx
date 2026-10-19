@@ -16,8 +16,8 @@ const LEVEL_STYLES: Record<TaskLogLevel, { badge: string; line: string }> = {
   SYSTEM: { badge: "text-violet-700 dark:text-violet-300", line: "hover:bg-violet-500/5" }
 };
 
-export default function TaskLogViewer({ emptyMessage, lineOffset = 0, message }: { emptyMessage: string; lineOffset?: number; message: string }) {
-  const lines = useMemo(() => parseTaskLog(message).map((line) => ({ ...line, lineNumber: line.lineNumber + lineOffset })), [lineOffset, message]);
+export default function TaskLogViewer({ emptyMessage, lineOffset = 0, message = "", lines: suppliedLines }: { emptyMessage: string; lineOffset?: number; message?: string; lines?: ParsedTaskLogLine[] }) {
+  const lines = useMemo(() => suppliedLines ?? parseTaskLog(message).map((line) => ({ ...line, lineNumber: line.lineNumber + lineOffset })), [lineOffset, message, suppliedLines]);
   const groups = useMemo(() => groupTaskLogSections(lines), [lines]);
   const usesLongTimestamp = lines.some((line) => timestampUsesDate(line.timestamp));
   if (!lines.length) return <div className="grid min-h-72 place-items-center px-5 text-xs text-muted-foreground">{emptyMessage}</div>;

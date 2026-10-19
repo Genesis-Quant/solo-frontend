@@ -6,13 +6,14 @@ import IconRefreshCw from "~icons/lucide/refresh-cw";
 import IconServer from "~icons/lucide/server";
 import IconTerminal from "~icons/lucide/terminal";
 
-import { appendTaskLog, shouldResetTerminalTaskLog } from "@/assets/lib/taskLogs";
+import { appendTaskLog, filterTaskLog, parseTaskLog, shouldResetTerminalTaskLog, type ParsedTaskLogLine, type TaskLogThreshold } from "@/assets/lib/taskLogs";
 import { createTaskLogApi, formatDuration } from "@/assets/lib/taskLogApi";
 import { cn } from "@/assets/lib/utils";
 import TaskLogViewer from "@/components/panel/TaskLogViewer";
 import { AppPagination } from "@/components/bar/AppPagination";
 import SchedulerState from "@/components/badge/SchedulerState";
 import { Button } from "@/ui/button";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/ui/tabs";
 import type { TaskLogScope } from "@/types/task";
 import { terminalStates, type WorkflowTasks } from "@/types/workflow";
@@ -40,6 +41,7 @@ export default function TaskLogPanel({ apiBase, className, reserveCloseButton = 
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(DEFAULT_PAGE_SIZE);
   const [scope, setScope] = useState<TaskLogScope>("full");
+  const [threshold, setThreshold] = useState<TaskLogThreshold>("INFO");
   const nextLineRef = useRef(0);
   const nextCursorRef = useRef<string | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
@@ -51,10 +53,11 @@ export default function TaskLogPanel({ apiBase, className, reserveCloseButton = 
   const resolvedTaskInstanceId = task?.task_instance_id ?? taskInstanceId;
   const taskUnavailable = taskLogUnavailable(workflow, task?.host, resolvedTaskInstanceId);
   const creating = !taskUnavailable && taskLogCreating(task?.host, resolvedTaskInstanceId);
-  const lines = useMemo(() => splitLogLines(message), [message]);
+  const parsedLines = useMemo(() => parseTaskLog(message), [message]);
+  const lines = useMemo(() => filterTaskLog(parsedLines, threshold), [parsedLines, threshold]);
   const totalPages = Math.max(1, Math.ceil(lines.length / pageSize));
   const safePage = Math.min(page, totalPages);
-  const visibleMessage = useMemo(() => lines.slice((safePage - 1) * pageSize, safePage * pageSize).join("\n"), [lines, pageSize, safePage]);
+  const visibleLines = useMemo(() => lines.slice((safePage - 1) * pageSize, safePage * pageSize), [lines, pageSize, safePage]);
 
   const resetLog = useCallback(() => {
     setMessage("");
@@ -76,6 +79,13 @@ export default function TaskLogPanel({ apiBase, className, reserveCloseButton = 
     resetScrollRef.current = true;
     setPage(1);
     setPageSize(value);
+  }, []);
+
+  const changeThreshold = useCallback((value: string) => {
+    followLatestRef.current = false;
+    resetScrollRef.current = true;
+    setPage(1);
+    setThreshold(value as TaskLogThreshold);
   }, []);
 
   const updateFollowLatest = useCallback(() => {
@@ -183,15 +193,15 @@ export default function TaskLogPanel({ apiBase, className, reserveCloseButton = 
     viewport.scrollTop = 0;
     resetScrollRef.current = false;
     followLatestRef.current = safePage === totalPages && isLogAtBottom(viewport);
-  }, [safePage, totalPages, visibleMessage]);
+  }, [safePage, totalPages, visibleLines]);
 
   return <section aria-label={title} className={cn("flex min-h-0 flex-col overflow-hidden rounded-md border bg-card shadow-sm", className)}>
     <header className={cn("flex shrink-0 items-start justify-between gap-5 border-b px-5 py-4", reserveCloseButton && "pr-14")}>
       <div className="flex min-w-0 items-center gap-2.5"><span className="grid size-8 shrink-0 place-items-center rounded-md border bg-muted/40"><IconTerminal width={15} height={15} /></span><div className="min-w-0"><h2 className="truncate text-base font-semibold">{title}</h2><p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">Workflow #{workflowInstanceId ?? "—"} / Task #{resolvedTaskInstanceId ?? "—"}</p></div></div>
-      <div className="flex shrink-0 items-center gap-2"><Tabs value={scope} onValueChange={(value) => setScope(value as TaskLogScope)}><TabsList className="h-8 rounded-md p-0.5"><TabsTrigger className="h-7 px-2 text-xs" value="full">全部</TabsTrigger><TabsTrigger className="h-7 px-2 text-xs" value="worker">Worker 输出</TabsTrigger></TabsList></Tabs><Button disabled={loading} size="sm" variant="outline" onClick={refresh}>{loading ? <IconLoaderCircle className="animate-spin" /> : <IconRefreshCw />}刷新</Button></div>
+      <div className="flex shrink-0 flex-wrap items-center gap-2"><Select value={threshold} onValueChange={changeThreshold}><SelectTrigger aria-label="最低日志级别" className="h-8 min-w-28 text-xs"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="INFO">INFO 及以上</SelectItem><SelectItem value="DEBUG">DEBUG 及以上</SelectItem><SelectItem value="TRACE">全部级别</SelectItem><SelectItem value="WARNING">WARNING 及以上</SelectItem><SelectItem value="ERROR">ERROR 及以上</SelectItem></SelectContent></Select><Tabs value={scope} onValueChange={(value) => setScope(value as TaskLogScope)}><TabsList className="h-8 rounded-md p-0.5"><TabsTrigger className="h-7 px-2 text-xs" value="full">全部</TabsTrigger><TabsTrigger className="h-7 px-2 text-xs" value="worker">Worker 输出</TabsTrigger></TabsList></Tabs><Button disabled={loading} size="sm" variant="outline" onClick={refresh}>{loading ? <IconLoaderCircle className="animate-spin" /> : <IconRefreshCw />}刷新</Button></div>
     </header>
     <div className="grid shrink-0 grid-cols-2 border-b bg-muted/15 sm:grid-cols-4"><TaskMeta icon={<IconActivity width={13} height={13} />} label="状态" value={<SchedulerState state={task?.state ?? workflow?.state ?? "LOADING"} />} /><TaskMeta icon={<IconTerminal width={13} height={13} />} label="Task" value={task?.name ?? "—"} /><TaskMeta icon={<IconServer width={13} height={13} />} label="Worker" value={task?.host ?? "—"} /><TaskMeta icon={<IconClock3 width={13} height={13} />} label="耗时" value={formatDuration(task?.duration_seconds)} /></div>
-    <div className="flex min-h-0 flex-1 flex-col bg-muted/20 text-foreground"><div className="flex shrink-0 items-center justify-between border-b px-4 py-2 font-mono text-[10px] tracking-[0.1em] text-muted-foreground"><span>{task?.name ?? "TASK"} / {resolvedTaskInstanceId ?? "—"}</span><span>{lines.length.toLocaleString("zh-CN")} LINES</span></div><div className="min-h-0 flex-1 overflow-auto" ref={logRef} onScroll={updateFollowLatest}>{taskLogContent(loading, workflow, visibleMessage, (safePage - 1) * pageSize, error, creating, taskUnavailable, scope)}</div>{error ? <div className="shrink-0 border-t border-destructive/20 bg-destructive/5 px-4 py-2.5 text-xs text-destructive">{error}</div> : null}<footer className="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-3 border-t px-4 py-2"><div className="text-[10px] text-muted-foreground"><p>{taskLogFooter(creating, taskUnavailable, scope)}</p><p className="mt-0.5">共 {lines.length.toLocaleString("zh-CN")} 行</p></div>{lines.length > 0 ? <AppPagination page={safePage} pageSize={pageSize} pageSizeOptions={LOG_PAGE_SIZE_OPTIONS} totalPages={totalPages} onPageChange={changePage} onPageSizeChange={changePageSize} /> : null}</footer></div>
+    <div className="flex min-h-0 flex-1 flex-col bg-muted/20 text-foreground"><div className="flex shrink-0 items-center justify-between border-b px-4 py-2 font-mono text-[10px] tracking-[0.1em] text-muted-foreground"><span>{task?.name ?? "TASK"} / {resolvedTaskInstanceId ?? "—"}</span><span>{lines.length.toLocaleString("zh-CN")} / {parsedLines.length.toLocaleString("zh-CN")} LINES</span></div><div className="min-h-0 flex-1 overflow-auto" ref={logRef} onScroll={updateFollowLatest}>{taskLogContent(loading, workflow, visibleLines, error, creating, taskUnavailable, scope)}</div>{error ? <div className="shrink-0 border-t border-destructive/20 bg-destructive/5 px-4 py-2.5 text-xs text-destructive">{error}</div> : null}<footer className="flex min-h-11 shrink-0 flex-wrap items-center justify-between gap-3 border-t px-4 py-2"><div className="text-[10px] text-muted-foreground"><p>{taskLogFooter(creating, taskUnavailable, scope)}</p><p className="mt-0.5">共 {lines.length.toLocaleString("zh-CN")} 行</p></div>{lines.length > 0 ? <AppPagination page={safePage} pageSize={pageSize} pageSizeOptions={LOG_PAGE_SIZE_OPTIONS} totalPages={totalPages} onPageChange={changePage} onPageSizeChange={changePageSize} /> : null}</footer></div>
   </section>;
 }
 
@@ -207,24 +217,17 @@ function selectedWorkflowTask(workflow: WorkflowTasks | null, taskInstanceId: nu
 function taskLogCreating(host: string | null | undefined, taskInstanceId: number | null) { return !taskInstanceId || !host; }
 function taskLogUnavailable(workflow: WorkflowTasks | null, host: string | null | undefined, taskInstanceId: number | null) { return Boolean(workflow && terminalStates.has(workflow.state) && taskLogCreating(host, taskInstanceId)); }
 
-function taskLogContent(loading: boolean, workflow: WorkflowTasks | null, message: string, lineOffset: number, error: string, creating: boolean, unavailable: boolean, scope: TaskLogScope) {
+function taskLogContent(loading: boolean, workflow: WorkflowTasks | null, lines: ParsedTaskLogLine[], error: string, creating: boolean, unavailable: boolean, scope: TaskLogScope) {
   if (loading && !workflow) return <div className="grid min-h-72 place-items-center"><IconLoaderCircle className="animate-spin text-muted-foreground" width={20} height={20} /></div>;
   const unavailableMessage = unavailable ? workflow?.error || "工作流已结束，未创建可读取日志的 Task" : "";
   const emptyMessage = scope === "worker" && !error && !creating ? "暂无 Worker 输出" : emptyLogMessage(error, creating);
-  return <TaskLogViewer message={message} lineOffset={lineOffset} emptyMessage={unavailableMessage || emptyMessage} />;
+  return <TaskLogViewer lines={lines} emptyMessage={unavailableMessage || emptyMessage} />;
 }
 
 function taskLogFooter(creating: boolean, unavailable: boolean, scope: TaskLogScope) {
   if (unavailable) return "工作流已结束，Task 未创建或未分配 Worker";
   if (creating) return "等待 DolphinScheduler 创建并分配 Task";
   return scope === "worker" ? "只显示 Worker 子进程输出" : "实时从 DolphinScheduler 读取";
-}
-
-function splitLogLines(message: string) {
-  if (!message) return [];
-  const lines = message.replace(/\r\n?/g, "\n").split("\n");
-  if (lines.at(-1) === "") lines.pop();
-  return lines;
 }
 
 function isLogAtBottom(viewport: HTMLDivElement) {
