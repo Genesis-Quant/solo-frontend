@@ -75,7 +75,7 @@ export default function ArtifactsPage() {
         <AlertDialogHeader>
           <AlertDialogTitle className="break-all">删除“{deleting?.package} {deleting?.version}”？</AlertDialogTitle>
           <AlertDialogDescription>
-            永久删除该成果的登记记录、wheel 及发布环境，无法恢复。源项目、已冻结任务的副本和历史报告保留。删除后该成果不再可下载或用于新安装、策略组装。若仍被项目、其他成果或在途安装引用，删除将被拒绝并提示原因。
+            永久删除该成果的登记记录、wheel 及发布环境，无法恢复。源项目、已冻结任务的副本和历史报告保留；已有策略使用自己的冻结副本，不会因策略引用阻止删除。删除后该成果不再可下载或用于新安装、策略组装。若仍被项目、其他成果或在途安装引用，删除将被拒绝并提示原因。
           </AlertDialogDescription>
         </AlertDialogHeader>
         <dl className="min-w-0 space-y-2 rounded-md border bg-muted/30 p-3 text-sm">
