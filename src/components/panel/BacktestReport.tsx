@@ -5,8 +5,9 @@ import { max as statisticsMax, mean as statisticsMean, sum } from "simple-statis
 import { useReportApi } from "@/assets/lib/reports";
 import { BacktestAnalytics, backtestTableTimeColumns, type BacktestTableName, type BacktestTablePage, type PortfolioPoint } from "@/assets/lib/backtestAnalysis";
 import { backtestTableConfigs } from "@/assets/lib/backtestTable";
+import { backtestReturnPoints, benchmarkValues, createBacktestReport, excessReturnError, type BacktestReturnMode } from "@/assets/lib/backtestReturns";
 import { chartRange, chartRangeIncluding, formatAxisLabel, thresholdMarkLine } from "@/assets/lib/chart";
-import { quantStatsReport, type DrawdownPeriod, type QuantStatsReport } from "@/assets/lib/quantstats";
+import type { DrawdownPeriod, QuantStatsReport } from "@/assets/lib/quantstats";
 import DateRangeBar from "@/components/bar/DateRangeBar";
 import EChart from "@/components/chart/EChart";
 import SortableCardStack from "@/components/card/SortableCardStack";
@@ -15,6 +16,7 @@ import { useAppStore } from "@/store";
 import type { AxisFormat, BacktestChartRanges, ChartRange } from "@/types/chart";
 import { emptyParquetTableQuery, type ParquetTableQuery } from "@/types/table";
 import { Card, CardContent, CardHeader, CardTitle } from "@/ui/card";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/ui/tabs";
 
@@ -47,6 +49,7 @@ export default function BacktestReport({ activeTab, annualTradingDays, chartRang
   const [portfolio, setPortfolio] = useState<PortfolioPoint[] | null>(null);
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [returnMode, setReturnMode] = useState<BacktestReturnMode>("strategy");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [tablePage, setTablePage] = useState(1);
@@ -74,6 +77,7 @@ export default function BacktestReport({ activeTab, annualTradingDays, chartRang
     setPortfolio(null);
     setStartDate("");
     setEndDate("");
+    setReturnMode("strategy");
     let instance: BacktestAnalytics | null = null;
     BacktestAnalytics.create(workflowInstanceId)
       .then(async (created) => {
@@ -86,7 +90,7 @@ export default function BacktestReport({ activeTab, annualTradingDays, chartRang
   }, [backtestApi, workflowInstanceId]);
 
   useEffect(() => {
-    if (!session || tableName || portfolio !== null) return;
+    if (!session || tableName || portfolio !== null) return undefined;
     const instance = session;
     let cancelled = false;
     setLoading(true);
@@ -124,35 +128,55 @@ export default function BacktestReport({ activeTab, annualTradingDays, chartRang
   }, [backtestApi, endDate, session, startDate, tableName, tablePage, tablePageSize, tableQuery, tableRequestKey, workflowInstanceId]);
 
   const selectedPortfolio = useMemo(() => (portfolio ?? []).filter((row) => (!startDate || row.time >= startDate) && (!endDate || row.time <= endDate)), [endDate, portfolio, startDate]);
-  const rangePoints = useMemo(() => (portfolio ?? []).map((row) => ({ time: row.time, value: row.dailyReturn })), [portfolio]);
-  const report = useMemo(() => createReport(selectedPortfolio, annualTradingDays, riskFreeRate, selectedPortfolio[0]?.time === portfolio?.[0]?.time), [annualTradingDays, portfolio, riskFreeRate, selectedPortfolio]);
+  const rangePoints = useMemo(() => backtestReturnPoints(portfolio ?? [], returnMode), [portfolio, returnMode]);
+  const excessError = useMemo(() => excessReturnError(selectedPortfolio), [selectedPortfolio]);
+  const report = useMemo(() => createBacktestReport(selectedPortfolio, annualTradingDays, riskFreeRate, selectedPortfolio[0]?.time === portfolio?.[0]?.time, returnMode), [annualTradingDays, portfolio, returnMode, riskFreeRate, selectedPortfolio]);
 
   useEffect(() => {
     if (!onChartRanges || !report) return;
+    const benchmark = returnMode === "strategy" ? benchmarkValues(selectedPortfolio) : [1];
     onChartRanges({
       netValue: chartRange([
         ...report.netValue.map((row) => row.value),
-        ...benchmarkValues(selectedPortfolio).filter((value): value is number => value !== null)
+        ...benchmark
       ]),
       totalEquity: chartRange(selectedPortfolio.map((row) => row.totalEquity)),
       drawdown: chartRange(report.drawdown.map((row) => row.value), true),
       rollingSharpe: chartRange(report.rollingSharpe.map((row) => row.value), true)
     });
-  }, [onChartRanges, report, selectedPortfolio]);
+  }, [onChartRanges, report, returnMode, selectedPortfolio]);
 
-  const overview = renderOverview({ chartRanges, error: sessionError || error, loading: !sessionError && loading, portfolio: selectedPortfolio, report, theme });
+  const overview = renderOverview({ chartRanges, error: sessionError || error || (returnMode === "excess" ? excessError : ""), loading: !sessionError && loading, portfolio: selectedPortfolio, report, returnMode, theme });
 
   const tableContent = tableName ? renderParquetContent({ data: tableData, download: { fileName: `backtest-${workflowInstanceId}-${tableName}.xlsx`, loadRows: () => loadRawTable(tableName) }, error: sessionError || (tableLoadedKey === tableRequestKey ? tableError : ""), loading: !sessionError && (tableLoading || tableLoadedKey !== tableRequestKey), name: tableName, page: tablePage, pageSize: tablePageSize, query: tableQuery, onPage: setTablePage, onPageSize: (nextPageSize) => { setTablePage(1); setTablePageSize(nextPageSize); }, onQuery: (nextQuery) => { setTablePage(1); setTableQuery(nextQuery); } }) : null;
 
   return <Tabs value={selectedTab} onValueChange={(value) => { setTablePage(1); setTableQuery(emptyParquetTableQuery()); setLocalTab(value); onActiveTabChange?.(value); }} className="relative">
     {showTabs ? <div className="sticky top-0 z-30 mb-2 max-w-full bg-background pb-1"><TabsList scrollable><TabsTrigger value="overview">回测概览</TabsTrigger>{tableTabs.map((tab) => <TabsTrigger key={tab.value} value={tab.value}>{tab.label}</TabsTrigger>)}</TabsList></div> : null}
     {!loading && !error && portfolio?.length ? <DateRangeBar endDate={endDate} maximumDate={portfolio.at(-1)?.time ?? ""} minimumDate={portfolio[0]?.time ?? ""} points={rangePoints} startDate={startDate} theme={theme} onRangeChange={(nextStartDate, nextEndDate) => { setTablePage(1); setStartDate(nextStartDate); setEndDate(nextEndDate); }} onReset={() => { setTablePage(1); setStartDate(portfolio[0]?.time ?? ""); setEndDate(portfolio.at(-1)?.time ?? ""); }} /> : null}
-    <TabsContent value="overview" className="space-y-4">{overview}</TabsContent>
+    <TabsContent value="overview" className="space-y-4">
+      {!loading && !sessionError && !error && portfolio?.length ? <ReturnModeSelect error={excessError} onChange={setReturnMode} value={returnMode} /> : null}
+      {overview}
+    </TabsContent>
     {tableTabs.map((tab) => <TabsContent className="min-h-[calc(100dvh-20rem)]" key={tab.value} value={tab.value}>{selectedTab === tab.value ? tableContent : null}</TabsContent>)}
   </Tabs>;
 }
 
-function ReportOverview({ chartRanges, portfolio, report, theme }: { chartRanges?: BacktestChartRanges; portfolio: PortfolioPoint[]; report: QuantStatsReport; theme: string }) {
+function ReturnModeSelect({ error, onChange, value }: { error: string; onChange: (value: BacktestReturnMode) => void; value: BacktestReturnMode }) {
+  const description = value === "excess" ? "超额净值 = 策略净值 ÷ 基准净值，并以区间首日归一为 1；收益、回撤和风险指标按后续交易日重算，无风险利率按 0 计。资产、手续费与明细保持实际值。" : error || "收益、回撤和风险指标按策略收益计算；选择超额收益可查看相对基准的净值表现。";
+  return <div className="flex flex-wrap items-end gap-x-4 gap-y-2" role="group" aria-label="回测报告收益设置">
+    <div className="w-full space-y-1.5 sm:w-44">
+      <span className="text-xs font-medium text-muted-foreground">收益口径</span>
+      <Select value={value} onValueChange={(next) => onChange(next as BacktestReturnMode)}>
+        <SelectTrigger aria-label="收益口径" className="w-full bg-card"><SelectValue /></SelectTrigger>
+        <SelectContent><SelectItem value="strategy">策略收益</SelectItem><SelectItem value="excess" disabled={!!error}>超额收益</SelectItem></SelectContent>
+      </Select>
+    </div>
+    <p className="max-w-3xl text-xs leading-5 text-muted-foreground">{description}</p>
+  </div>;
+}
+
+function ReportOverview({ chartRanges, portfolio, report, returnMode, theme }: { chartRanges?: BacktestChartRanges; portfolio: PortfolioPoint[]; report: QuantStatsReport; returnMode: BacktestReturnMode; theme: string }) {
+  const excess = returnMode === "excess";
   const returnMetrics = [
     { label: "累计收益", value: report.totalReturn, format: "percent" },
     { label: "年化收益", value: report.cagr, format: "percent" },
@@ -172,19 +196,19 @@ function ReportOverview({ chartRanges, portfolio, report, theme }: { chartRanges
     items={[
       {
         id: "returns",
-        content: <ReportCard title="收益分析">
+        content: <ReportCard title={excess ? "超额收益分析" : "收益分析"}>
           <MetricGrid metrics={returnMetrics} />
           <MetricGrid metrics={feeMetrics(portfolio)} />
-          <ChartCard title="策略、基准净值与总资产"><EChart height={360} option={portfolioOption(portfolio, report, theme, chartRanges)} /></ChartCard>
-          <ChartCard title="滚动年化 Sharpe"><EChart height={340} option={rollingSharpeOption(report, theme, chartRanges?.rollingSharpe)} /></ChartCard>
-          <PerformanceTable report={report} />
+          <ChartCard title={excess ? "超额净值与实际总资产" : "策略、基准净值与总资产"}><EChart height={360} option={portfolioOption(portfolio, report, theme, returnMode, chartRanges)} /></ChartCard>
+          <ChartCard title={excess ? "超额收益滚动年化 Sharpe" : "滚动年化 Sharpe"}><EChart height={340} option={rollingSharpeOption(report, theme, chartRanges?.rollingSharpe)} /></ChartCard>
+          <PerformanceTable report={report} returnMode={returnMode} />
         </ReportCard>
       },
       {
         id: "drawdown",
-        content: <ReportCard title="回撤分析">
+        content: <ReportCard title={excess ? "超额回撤分析" : "回撤分析"}>
           <MetricGrid metrics={drawdownMetrics} />
-          <ChartCard title="回撤曲线"><EChart height={340} option={drawdownOption(report, theme, chartRanges?.drawdown)} /></ChartCard>
+          <ChartCard title={excess ? "超额净值回撤曲线" : "回撤曲线"}><EChart height={340} option={drawdownOption(report, theme, chartRanges?.drawdown)} /></ChartCard>
           <DrawdownTable rows={periods.slice(0, 5)} />
         </ReportCard>
       }
@@ -192,11 +216,11 @@ function ReportOverview({ chartRanges, portfolio, report, theme }: { chartRanges
   />;
 }
 
-function renderOverview({ chartRanges, error, loading, portfolio, report, theme }: { chartRanges?: BacktestChartRanges; error: string; loading: boolean; portfolio: PortfolioPoint[]; report: QuantStatsReport | null; theme: string }): ReactNode {
+function renderOverview({ chartRanges, error, loading, portfolio, report, returnMode, theme }: { chartRanges?: BacktestChartRanges; error: string; loading: boolean; portfolio: PortfolioPoint[]; report: QuantStatsReport | null; returnMode: BacktestReturnMode; theme: string }): ReactNode {
   if (loading) return <ReportLoading />;
   if (error) return <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">{error}</div>;
   if (!report) return <div className="rounded-md border py-10 text-center text-sm text-muted-foreground">所选日期范围内暂无回测数据</div>;
-  return <ReportOverview chartRanges={chartRanges} portfolio={portfolio} report={report} theme={theme} />;
+  return <ReportOverview chartRanges={chartRanges} portfolio={portfolio} report={report} returnMode={returnMode} theme={theme} />;
 }
 
 function ReportCard({ children, title }: { children: ReactNode; title: string }) { return <Card className="rounded-md py-5 shadow-sm"><CardHeader className="px-5 pb-2 pr-14"><CardTitle className="text-base font-semibold">{title}</CardTitle></CardHeader><CardContent className="space-y-4 px-5">{children}</CardContent></Card>; }
@@ -204,7 +228,7 @@ function ChartCard({ children, title }: { children: ReactNode; title: ReactNode 
 function MetricGrid({ metrics }: { metrics: Metric[] }) { return <div className="grid grid-cols-2 gap-3 md:grid-cols-4">{metrics.map((metric) => <div className="rounded-md border bg-card px-4 py-3 shadow-sm" key={metric.label}><div className="text-xs text-muted-foreground">{metric.label}</div><p className="mt-2 text-lg font-semibold tabular-nums tracking-tight">{formatMetric(metric.value, metric.format)}</p></div>)}</div>; }
 function ReportLoading() { return <div className="grid min-h-80 place-items-center rounded-md border bg-card"><div className="text-center"><Loader2 className="mx-auto animate-spin text-primary" /><p className="mt-3 text-sm text-muted-foreground">DuckDB 正在读取回测结果...</p></div></div>; }
 
-function PerformanceTable({ report }: { report: QuantStatsReport }) {
+function PerformanceTable({ report, returnMode }: { report: QuantStatsReport; returnMode: BacktestReturnMode }) {
   const longestDrawdown = report.drawdownPeriods.length ? statisticsMax(report.drawdownPeriods.map((row) => row.days)) : null;
   const rows = [
     { label: "累计收益率", value: report.totalReturn, format: "percent" },
@@ -229,7 +253,7 @@ function PerformanceTable({ report }: { report: QuantStatsReport }) {
     { label: "收益/痛苦比率", value: report.gainToPainRatio }
   ] satisfies Metric[];
   const groupedRows = Array.from({ length: Math.ceil(rows.length / 3) }, (_, index) => rows.slice(index * 3, index * 3 + 3));
-  return <div className="max-h-[440px] overflow-auto rounded-md border"><Table><TableHeader className="sticky top-0 z-10 bg-muted/90 backdrop-blur"><TableRow>{[0, 1, 2].map((column) => <Fragment key={column}><TableHead>指标</TableHead><TableHead className="text-right">策略</TableHead></Fragment>)}</TableRow></TableHeader><TableBody>{groupedRows.map((group, rowIndex) => <TableRow key={rowIndex}>{[0, 1, 2].map((column) => { const metric = group[column]; return <Fragment key={metric?.label ?? column}><TableCell>{metric?.label ?? ""}</TableCell><TableCell className="text-right font-mono tabular-nums">{metric ? formatMetric(metric.value, metric.format) : ""}</TableCell></Fragment>; })}</TableRow>)}</TableBody></Table></div>;
+  return <div className="max-h-[440px] overflow-auto rounded-md border"><Table><TableHeader className="sticky top-0 z-10 bg-muted/90 backdrop-blur"><TableRow>{[0, 1, 2].map((column) => <Fragment key={column}><TableHead>指标</TableHead><TableHead className="text-right">{returnMode === "excess" ? "超额" : "策略"}</TableHead></Fragment>)}</TableRow></TableHeader><TableBody>{groupedRows.map((group, rowIndex) => <TableRow key={rowIndex}>{[0, 1, 2].map((column) => { const metric = group[column]; return <Fragment key={metric?.label ?? column}><TableCell>{metric?.label ?? ""}</TableCell><TableCell className="text-right font-mono tabular-nums">{metric ? formatMetric(metric.value, metric.format) : ""}</TableCell></Fragment>; })}</TableRow>)}</TableBody></Table></div>;
 }
 
 function DrawdownTable({ rows }: { rows: DrawdownPeriod[] }) {
@@ -243,8 +267,6 @@ function renderParquetContent({ data, download, error, loading, name, onPage, on
   if (!data) return null;
   return <ParquetDataTable columnConfigs={backtestTableConfigs[name]} columns={data.columns} containerClassName="max-h-[calc(100dvh-20rem)]" download={download} loading={loading} numericStats={data.numericStats} pagination={{ page, pageSize, total: data.total, onPageChange: onPage, onPageSizeChange: onPageSize }} query={{ value: query, onChange: onQuery }} rows={data.rows} timeColumn={backtestTableTimeColumns[name]} />;
 }
-
-function createReport(rows: PortfolioPoint[], periods: number, riskFreeRate: number, excludeInitialReturn: boolean) { return rows.length ? quantStatsReport(rows.map((row) => ({ time: row.time, value: row.dailyReturn ?? 0 })), periods, riskFreeRate, excludeInitialReturn) : null; }
 
 function feeMetrics(rows: PortfolioPoint[]): Metric[] {
   const fees = rows.map((row) => row.dailyFee).filter((value): value is number => value !== null && value >= 0);
@@ -271,8 +293,14 @@ function formatMetric(value: number | null | undefined, format: MetricFormat = "
 
 function isBacktestTableName(value: string): value is BacktestTableName { return tableTabs.some((tab) => tab.value === value); }
 function createTableRequestKey(workflowInstanceId: number, name: BacktestTableName | null, startDate: string, endDate: string, page: number, pageSize: number, query: ParquetTableQuery) { return name ? `${workflowInstanceId}:${name}:${startDate}:${endDate}:${page}:${pageSize}:${JSON.stringify(query)}` : ""; }
-function portfolioOption(rows: PortfolioPoint[], report: QuantStatsReport, theme: string, ranges?: BacktestChartRanges) { const benchmark = benchmarkValues(rows); const series: Record<string, unknown>[] = [{ name: "策略净值", type: "line", data: report.netValue.map((row) => row.value), showSymbol: false, lineStyle: { width: 2.2 }, color: "#2563eb" }]; if (benchmark.some((value) => value !== null)) series.push({ name: "基准净值", type: "line", data: benchmark, showSymbol: false, lineStyle: { width: 1.8 }, color: "#d97706" }); series.push({ name: "总资产", type: "line", yAxisIndex: 1, data: rows.map((row) => row.totalEquity), showSymbol: false, lineStyle: { width: 1.5 }, color: "#059669" }); return baseOption(theme, rows.map((row) => row.time), series, ranges?.netValue, ranges?.totalEquity, true, "decimal", "integer"); }
-function benchmarkValues(rows: PortfolioPoint[]) { const base = rows.find((row) => row.benchmarkNetValue !== null && row.benchmarkNetValue > 0)?.benchmarkNetValue; return rows.map((row) => base && row.benchmarkNetValue !== null ? row.benchmarkNetValue / base : null); }
+function portfolioOption(rows: PortfolioPoint[], report: QuantStatsReport, theme: string, mode: BacktestReturnMode, ranges?: BacktestChartRanges) {
+  const excess = mode === "excess";
+  const benchmark = excess ? rows.map(() => 1) : benchmarkValues(rows);
+  const series: Record<string, unknown>[] = [{ name: excess ? "超额净值" : "策略净值", type: "line", data: report.netValue.map((row) => row.value), showSymbol: false, lineStyle: { width: 2.2 }, color: "#2563eb" }];
+  if (benchmark.some((value) => value !== null)) series.push({ name: excess ? "相对基准 = 1" : "基准净值", type: "line", data: benchmark, showSymbol: false, lineStyle: { width: 1.8, type: excess ? "dashed" : "solid" }, color: "#d97706" });
+  series.push({ name: excess ? "实际总资产" : "总资产", type: "line", yAxisIndex: 1, data: rows.map((row) => row.totalEquity), showSymbol: false, lineStyle: { width: 1.5 }, color: "#059669" });
+  return baseOption(theme, rows.map((row) => row.time), series, ranges?.netValue, ranges?.totalEquity, true, "decimal", "integer");
+}
 function drawdownOption(report: QuantStatsReport, theme: string, range?: ChartRange) { return baseOption(theme, report.drawdown.map((row) => row.time), [{ name: "回撤", type: "line", data: report.drawdown.map((row) => row.value), showSymbol: false, lineStyle: { width: 2 }, areaStyle: { opacity: 0.12 }, color: "#dc2626" }], range, undefined, false, "percent"); }
 function rollingSharpeOption(report: QuantStatsReport, theme: string, range?: ChartRange) { return baseOption(theme, report.rollingSharpe.map((row) => row.time), [{ name: "滚动年化 Sharpe", type: "line", data: report.rollingSharpe.map((row) => row.value), showSymbol: false, lineStyle: { width: 1.8 }, color: "#d97706", markLine: thresholdMarkLine(theme, "Sharpe = 0.5", 0.5) }], chartRangeIncluding(range, 0.5)); }
 function baseOption(theme: string, dates: string[], series: unknown[], primaryRange?: ChartRange, secondaryRange?: ChartRange, dualAxis = false, primaryFormat: AxisFormat = "decimal", secondaryFormat: AxisFormat = "decimal") { const color = theme === "dark" ? "#8996a5" : "#687771"; const line = theme === "dark" ? "rgba(160,184,210,.10)" : "rgba(24,66,54,.10)"; const axis = (range?: ChartRange, format: AxisFormat = "decimal") => ({ type: "value", scale: true, min: range?.min, max: range?.max, axisLabel: { color, fontSize: 9, formatter: (value: number) => formatAxisLabel(value, format) }, axisLine: { show: false }, axisTick: { show: false }, splitLine: { lineStyle: { color: line } } }); return { animationDuration: 180, grid: { left: 48, right: dualAxis ? 58 : 28, top: 42, bottom: 38, containLabel: true }, legend: { top: 0, left: 0, textStyle: { color, fontSize: 10 } }, tooltip: { trigger: "axis", backgroundColor: theme === "dark" ? "#151b24" : "#fff", borderColor: line, textStyle: { color: theme === "dark" ? "#eef4f7" : "#13201d", fontSize: 11 } }, xAxis: { type: "category", data: dates, boundaryGap: false, axisLine: { lineStyle: { color: line } }, axisLabel: { color, fontSize: 9, hideOverlap: true }, axisTick: { show: false } }, yAxis: dualAxis ? [axis(primaryRange, primaryFormat), { ...axis(secondaryRange, secondaryFormat), splitLine: { show: false } }] : axis(primaryRange, primaryFormat), series } as Record<string, unknown>; }
