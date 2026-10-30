@@ -21,6 +21,9 @@ export interface StrategyRecord {
   }>;
   forms: Record<StrategyStage, Record<string, unknown>>;
   status: string;
+  attempt: number;
+  canStop: boolean;
+  canRetry: boolean;
   error: string;
   workflowId: number | null;
   schemeVersion: string | null;
@@ -48,5 +51,5 @@ export interface FormSchema {
 }
 export type StrategyForms = Record<StrategyStage, { schema: FormSchema; values: Record<string, unknown> }>;
 
-export const strategyStatus: Record<string, string> = { building: "组装中", queued: "排队中", running: "回测中", success: "回测成功", failed: "回测失败" };
-export const strategyActive = (status: string) => ["building", "queued", "running"].includes(status);
+export const strategyStatus: Record<string, string> = { building: "组装中", queued: "排队中", running: "回测中", stopping: "终止中", retrying: "重试排队中", success: "回测成功", failed: "回测失败", stopped: "已终止" };
+export const strategyActive = (status: string) => ["building", "queued", "running", "stopping", "retrying"].includes(status);

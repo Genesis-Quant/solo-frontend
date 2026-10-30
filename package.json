@@ -1,6 +1,6 @@
 {
   "name": "solo-frontend",
-  "version": "0.0.0",
+  "version": "0.1.6",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "build:scheme": "vite build --config notebook/vite.config.ts",
     "lint": "eslint src --ext .ts,.tsx",
+    "test:tasks": "node --test tests/taskLogs.test.mjs tests/tasks.test.mjs tests/versionDeletion.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

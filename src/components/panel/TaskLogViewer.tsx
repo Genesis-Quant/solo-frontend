@@ -3,7 +3,7 @@ import { useId, useMemo, useState } from "react";
 
 import { cn } from "@/assets/lib/utils";
 import AnimatedCollapse from "@/components/panel/AnimatedCollapse";
-import { groupTaskLogSections, parseTaskLog, type ParsedTaskLogLine, type TaskLogGroup, type TaskLogLevel } from "@/assets/lib/taskLogs";
+import { groupTaskLogSections, parseTaskLog, taskLogEntries, type ParsedTaskLogLine, type TaskLogGroup, type TaskLogLevel } from "@/assets/lib/taskLogs";
 
 const LEVEL_STYLES: Record<TaskLogLevel, { badge: string; line: string }> = {
   TRACE: { badge: "text-slate-500 dark:text-slate-400", line: "hover:bg-slate-500/5" },
@@ -46,27 +46,32 @@ function TaskLogSection({ group, usesLongTimestamp }: { group: TaskLogGroup; use
 }
 
 function TaskLogRows({ lines, usesLongTimestamp }: { lines: ParsedTaskLogLine[]; usesLongTimestamp: boolean }) {
-  return lines.map((line) => <TaskLogRow key={line.lineNumber} line={line} usesLongTimestamp={usesLongTimestamp} />);
+  return taskLogEntries(lines).map((entry) => {
+    const level = entry[0].level;
+    return <div key={entry[0].lineNumber} data-log-entry={entry[0].entry} data-level={level ?? undefined}
+      className={cn("border-l-2 border-l-transparent transition-colors", level && LEVEL_STYLES[level].line)}>
+      {entry.map((line, index) => <TaskLogRow key={line.lineNumber} line={line} showMetadata={index === 0} usesLongTimestamp={usesLongTimestamp} />)}
+    </div>;
+  });
 }
 
-function TaskLogRow({ line, usesLongTimestamp }: { line: ParsedTaskLogLine; usesLongTimestamp: boolean }) {
+function TaskLogRow({ line, usesLongTimestamp, showMetadata }: { line: ParsedTaskLogLine; usesLongTimestamp: boolean; showMetadata: boolean }) {
   const style = line.level ? LEVEL_STYLES[line.level] : null;
   const timestampTitle = line.outerTimestamp
     ? `Loguru: ${line.timestamp ?? "—"}\nDolphinScheduler: ${line.outerTimestamp}`
     : line.timestamp ?? undefined;
   return <div className={cn(
-    "group grid min-h-5 border-l-2 border-l-transparent px-2 transition-colors",
+    "grid min-h-5 px-2",
     usesLongTimestamp
       ? "grid-cols-[3.25rem_8rem_4.25rem_minmax(0,1fr)]"
-      : "grid-cols-[3.25rem_4.25rem_4.25rem_minmax(0,1fr)]",
-    style?.line
+      : "grid-cols-[3.25rem_4.25rem_4.25rem_minmax(0,1fr)]"
   )}>
     <span className="select-none pr-3 text-right text-muted-foreground/45">{line.lineNumber}</span>
-    <span className="truncate pr-4 font-medium text-sky-700 dark:text-sky-300" title={timestampTitle}>{formatLogTimestamp(line.timestamp)}</span>
-    <span className={cn("pr-3 font-semibold", style?.badge)}>{line.level ?? ""}</span>
+    <span className="truncate pr-4 font-medium text-sky-700 dark:text-sky-300" title={timestampTitle}>{showMetadata ? formatLogTimestamp(line.timestamp) : ""}</span>
+    <span className={cn("pr-3 font-semibold", style?.badge)}>{showMetadata ? line.level ?? "" : ""}</span>
     <span className="whitespace-pre-wrap break-words pr-5">
-      {line.format === "dolphinscheduler" ? <LogSource>DS</LogSource> : null}
-      {line.file ? <PythonSource file={line.file} functionName={line.functionName} line={line.sourceLine} title={line.source ?? undefined} /> : line.source && line.source !== "DolphinScheduler" ? <LogSource title={line.source}>{line.source}</LogSource> : null}
+      {showMetadata && line.format === "dolphinscheduler" ? <LogSource>DS</LogSource> : null}
+      {showMetadata && line.file ? <PythonSource file={line.file} functionName={line.functionName} line={line.sourceLine} title={line.source ?? undefined} /> : showMetadata && line.source && line.source !== "DolphinScheduler" ? <LogSource title={line.source}>{line.source}</LogSource> : null}
       <span className={line.format === "traceback" ? "text-red-700 dark:text-red-300" : "text-foreground/90"}>{line.message || " "}</span>
     </span>
   </div>;

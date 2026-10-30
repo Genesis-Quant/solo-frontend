@@ -83,7 +83,7 @@ export default function ProjectsPage({ kind }: { kind: ProjectKind }) {
         search={{ value: search, onChange: changeSearch, placeholder: "搜索项目名称、描述或 ID" }}
         filters={<Select value={status} onValueChange={(value) => { setStatus(value); resetPage(); }}>
           <SelectTrigger className="w-36" aria-label="研究状态筛选"><SelectValue /></SelectTrigger>
-          <SelectContent><SelectItem value="all">全部状态</SelectItem><SelectItem value="success">研究成功</SelectItem><SelectItem value="running">运行中</SelectItem><SelectItem value="failed">研究失败</SelectItem><SelectItem value="empty">未提交</SelectItem></SelectContent>
+          <SelectContent><SelectItem value="all">全部状态</SelectItem><SelectItem value="success">研究成功</SelectItem><SelectItem value="running">运行中</SelectItem><SelectItem value="failed">研究失败</SelectItem><SelectItem value="stopped">已终止</SelectItem><SelectItem value="empty">未提交</SelectItem></SelectContent>
         </Select>} />
       {form && (
         <ProjectDialog

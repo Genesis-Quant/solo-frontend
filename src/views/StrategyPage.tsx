@@ -94,7 +94,7 @@ function StrategyDetail({ id }: { id: string }) {
       ? <div className="component-fade-in"><ResearchReport report={currentReport.data} workflowId={record?.workflowId ?? 0} /></div>
       : record && strategyActive(record.status)
         ? <div className="component-fade-in flex h-64 items-center justify-center gap-3 rounded-lg border bg-card text-sm text-muted-foreground shadow-sm"><LoaderCircle className="size-5 animate-spin" />{strategyStatus[record.status]}，完成后自动显示回测报告</div>
-        : !error && record?.status !== "failed" && currentReport?.status !== "failed"
+        : !error && record?.status !== "failed" && record?.status !== "stopped" && currentReport?.status !== "failed"
           ? <ReportSkeleton />
           : null}
   </section>;

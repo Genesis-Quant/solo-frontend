@@ -158,6 +158,8 @@ a {
 
 .status-badge[data-status="running"],
 .status-badge[data-status="queued"],
+.status-badge[data-status="stopping"],
+.status-badge[data-status="retrying"],
 .status-badge[data-status="building"] {
   color: var(--accent);
   background: var(--control-accent);
@@ -166,6 +168,8 @@ a {
 
 .status-badge[data-status="running"]::before,
 .status-badge[data-status="queued"]::before,
+.status-badge[data-status="stopping"]::before,
+.status-badge[data-status="retrying"]::before,
 .status-badge[data-status="building"]::before {
   width: 6px;
   height: 6px;
@@ -187,7 +191,8 @@ a {
   }
 }
 
-.status-badge[data-status="empty"] {
+.status-badge[data-status="empty"],
+.status-badge[data-status="stopped"] {
   color: var(--muted);
   background: var(--control-secondary);
   border-color: transparent;

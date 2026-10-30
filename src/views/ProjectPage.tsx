@@ -11,7 +11,8 @@ import {
   FileText,
   LoaderCircle,
   Pencil,
-  Terminal
+  Terminal,
+  Trash2
 } from "lucide-react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 
@@ -39,6 +40,16 @@ import {
   type TaskStep
 } from "@/types/research";
 import { Alert, AlertDescription, AlertTitle } from "@/ui/alert";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle
+} from "@/ui/alert-dialog";
 import { Badge } from "@/ui/badge";
 import { Button } from "@/ui/button";
 import {
@@ -149,12 +160,15 @@ export default function ProjectPage() {
     project.versions[0];
   return (
     <ProjectDetail
-      key={`${project.id}:${version?.id}`}
+      key={`${project.id}:${version?.id}:${version?.attempt}`}
       project={project}
       version={version}
       selectVersion={(id) =>
         setSearchParams({ version: id }, { replace: true })
       }
+      onVersionDeleted={(nextId) => {
+        setSearchParams(nextId ? { version: nextId } : {}, { replace: true });
+      }}
     />
   );
 }
@@ -162,11 +176,13 @@ export default function ProjectPage() {
 function ProjectDetail({
   project,
   version,
-  selectVersion
+  selectVersion,
+  onVersionDeleted
 }: {
   project: ResearchProject;
   version?: ResearchVersion;
   selectVersion: (id: string) => void;
+  onVersionDeleted: (nextId: string | null) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [sideTab, setSideTab] = usePageState("project-detail", "sideTab", "parameters");
@@ -361,11 +377,12 @@ function ProjectDetail({
               project={project}
               version={version}
               onLogs={() => setLogs("research")}
+              onDeleted={onVersionDeleted}
             />
           </>
         )}
       </aside>
-      <section className="flex min-h-[440px] min-w-0 flex-1 flex-col gap-5 p-5 lg:min-h-0 lg:p-6">
+      <section className="mx-auto flex min-h-[440px] min-w-0 w-full max-w-[1600px] flex-1 flex-col gap-5 p-5 lg:min-h-0 lg:p-6">
         <div className="flex shrink-0 items-center justify-between gap-3">
           <h2 className="text-base font-semibold">
             {kindLabels[project.kind]}
@@ -425,9 +442,9 @@ function ProjectDetail({
       )}
       {logs && version && (
         <TaskLogDialog
-          key={version.id}
-            description={`${project.name} / v${version.number}`}
-            apiBase={`/projects/${project.id}/versions/${version.id}`}
+          key={`${version.id}:${version.attempt}`}
+            description={`${project.name} / v${version.number} / 第 ${version.attempt} 次`}
+            apiBase={`/tasks/${version.id}/attempts/${version.attempt}`}
             workflowId={version.workflowId}
           onClose={() => setLogs(null)}
         />
@@ -436,23 +453,49 @@ function ProjectDetail({
   );
 }
 
+const activePhases = new Set(["building", "queued", "running", "stopping", "retrying"]);
+
 function VersionActions({
   project,
   version,
-  onLogs
+  onLogs,
+  onDeleted
 }: {
   project: ResearchProject;
   version: ResearchVersion;
   onLogs: () => void;
+  onDeleted: (nextId: string | null) => void;
 }) {
   const publish = useResearchStore((state) => state.publishVersion);
+  const removeVersion = useResearchStore((state) => state.deleteVersion);
   const [confirmVersion, setConfirmVersion] = useState<string | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [publishError, setPublishError] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState("");
   const retired = !!(project.retired || version.retired || version.artifact?.retired);
   const checking = publishing || version.publishStatus === "checking";
   const acceptedPublication = version.publishStatus === "published";
   const failure = acceptedPublication ? "" : publishError || (version.publishStatus === "failed" ? version.publishError : "");
+  const deleteBlocked = activePhases.has(version.phase ?? "") || version.status === "running"
+    ? "运行中的版本需先终止任务或取消构建"
+    : acceptedPublication ? "已发布为独立成果的版本不能删除" : checking ? "发布校验中，请稍后再删除" : "";
+
+  async function deleteVersion() {
+    if (deleting || deleteBlocked) return;
+    setDeleting(true);
+    setDeleteError("");
+    const index = project.versions.findIndex((item) => item.id === version.id);
+    const next = project.versions[index - 1] ?? project.versions[index + 1];
+    try {
+      await removeVersion(project.id, version.id);
+      onDeleted(next?.id ?? null);
+    } catch (cause) {
+      setDeleteError(cause instanceof Error ? cause.message : "删除失败，请重试");
+      setDeleting(false);
+    }
+  }
   return (
     <div className="space-y-3 border-t p-4" aria-live="polite">
       {!retired && !acceptedPublication && confirmVersion === version.id && (
@@ -506,6 +549,8 @@ function VersionActions({
                 retired ||
                 acceptedPublication ||
                 checking ||
+                deleting ||
+                confirmDelete ||
                 !!confirmVersion
               }
               variant={
@@ -543,7 +588,59 @@ function VersionActions({
           </TooltipTrigger>
           <TooltipContent>DolphinScheduler 日志</TooltipContent>
         </Tooltip>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            {/* 禁用按钮不触发指针事件，外层元素承载不能删除的原因提示。 */}
+            <span tabIndex={deleteBlocked ? 0 : undefined}>
+              <Button
+                variant="outline"
+                size="icon"
+                className="text-destructive hover:text-destructive"
+                aria-label={`删除版本 v${version.number}`}
+                disabled={!!deleteBlocked || deleting}
+                onClick={() => { setDeleteError(""); setConfirmDelete(true); }}
+              >
+                <Trash2 />
+              </Button>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{deleteBlocked || "删除版本并回收运行资源"}</TooltipContent>
+        </Tooltip>
       </div>
+      <AlertDialog open={confirmDelete} onOpenChange={(open) => { if (!open && !deleting) setConfirmDelete(false); }}>
+        <AlertDialogContent onEscapeKeyDown={(event) => { if (deleting) event.preventDefault(); }}>
+          <AlertDialogHeader>
+            <AlertDialogTitle>删除 v{version.number}？</AlertDialogTitle>
+            <AlertDialogDescription>
+              将永久删除该版本记录、全部运行轮次和调度日志，并回收 run 目录（冻结环境、检查点、报告数据）及仅被它引用的候选包，不能恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <ul className="list-disc space-y-1 pl-5 text-xs text-muted-foreground">
+            <li>版本号不会被之后保存的新版本复用。</li>
+            <li>用该版本组装的策略保留自己的运行副本，不受影响。</li>
+            <li>Notebook 中展示时生成的报告属于项目目录，不会删除。</li>
+          </ul>
+          {deleteError && (
+            <Alert variant="destructive">
+              <AlertDescription className="whitespace-pre-wrap break-words">{deleteError}</AlertDescription>
+            </Alert>
+          )}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>取消</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={deleting}
+              onClick={(event) => {
+                event.preventDefault();
+                deleteVersion();
+              }}
+            >
+              {deleting && <LoaderCircle className="animate-spin" />}
+              {deleting ? "正在删除…" : "确认删除"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

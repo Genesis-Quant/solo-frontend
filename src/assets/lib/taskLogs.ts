@@ -22,6 +22,8 @@ export type ParsedTaskLogLine = {
   source: string | null;
   sourceLine: number | null;
   timestamp: string | null;
+  entry: number;
+  continuation: boolean;
 };
 
 export type TaskLogGroup = {
@@ -41,33 +43,81 @@ const LOGURU_STANDARD_LINE = new RegExp(
   String.raw`^\s*(${TIMESTAMP_PATTERN})\s*\|\s*([A-Z]+)\s*\|\s*(.*?)\s+-\s?(.*)$`
 );
 const LOG_PATH_LINE = /^\s*\[LOG-PATH\]:\s*(.*?),\s*\[HOST\]:\s*(.*?)\s*$/;
-const TRACEBACK_START = /^\s*Traceback \(most recent call last\):\s*$/;
+const TRACEBACK_START = /Traceback \(most recent call last\):\s*$/;
 const TRACEBACK_FILE = /^\s*File ".+", line \d+(?:, in .+)?\s*$/;
 const TRACEBACK_END = /^\s*(?:[\w.]+(?:Error|Exception|Interrupt|Exit)|KeyboardInterrupt)(?::.*)?\s*$/;
+const TRACEBACK_CHAIN = /^\s*(?:During handling of the above exception|The above exception was the direct cause of the following exception).*$/;
+const LOGURU_MESSAGE_LINE = new RegExp(String.raw`^\s*(${TIMESTAMP_PATTERN})\s*\|\s*([A-Z]+)\s*\|\s?(.*)$`);
 const SECTION_BORDER = /^\*{20,}$/;
 const SECTION_TITLE = /^\*{5,}\s+(.+?)\s+\*{5,}$/;
 
 export function parseTaskLog(message: string): ParsedTaskLogLine[] {
-  const lines = splitLogLines(message);
+  const result: ParsedTaskLogLine[] = [];
+  let entry: ParsedTaskLogLine | null = null;
   let traceback = false;
-
-  return lines.map((raw, index) => {
+  let ended = false;
+  let workerOutput = false;
+  let workerRecordStart = false;
+  for (const [index, raw] of splitLogLines(message).entries()) {
     const parsed = parseDirectLine(raw, index + 1);
-    const content = parsed.message;
-
-    if (TRACEBACK_START.test(content)) traceback = true;
-    if (traceback || TRACEBACK_FILE.test(content) || TRACEBACK_END.test(content)) {
-      const result: ParsedTaskLogLine = {
-        ...parsed,
-        format: "traceback",
-        level: "ERROR"
-      };
-      if (TRACEBACK_END.test(content)) traceback = false;
-      return result;
+    if (parsed.format === "dolphinscheduler" || parsed.outerTimestamp !== null) {
+      workerOutput = parsed.outerTimestamp !== null || parsed.message === "子进程输出";
+      workerRecordStart = workerOutput;
+      if (parsed.format === "dolphinscheduler" && workerOutput) continue;
     }
+    if (workerOutput && parsed.format === "plain" && parsed.message.startsWith("\t")) parsed.message = parsed.message.slice(1);
+    const content = parsed.message;
+    const structured = parsed.format === "loguru" || parsed.format === "dolphinscheduler";
+    const section = SECTION_BORDER.test(content.trim()) || SECTION_TITLE.test(content.trim());
+    const startsTraceback = TRACEBACK_START.test(content);
+    const tracebackLine = startsTraceback || TRACEBACK_FILE.test(content) || TRACEBACK_END.test(content) || TRACEBACK_CHAIN.test(content);
+    // DS envelopes prove multiline ownership; indentation in worker-only text does not.
+    const continuesWorkerMessage = workerOutput && !workerRecordStart && raw.startsWith("\t");
+    const followsTraceback = traceback && !structured && !section
+      && (!ended || !content.trim() || tracebackLine || continuesWorkerMessage && /^\s/.test(content));
+    const plainMessage = !structured && !section && !followsTraceback && !tracebackLine && !continuesWorkerMessage;
+    if (structured || section || plainMessage) {
+      entry = null;
+      traceback = false;
+      ended = false;
+    }
+    const inherited = !structured && !section && entry !== null
+      && (followsTraceback || continuesWorkerMessage && !traceback && !tracebackLine);
+    if (tracebackLine || followsTraceback) {
+      parsed.format = "traceback";
+      parsed.level = entry?.level === "CRITICAL" ? "CRITICAL" : "ERROR";
+      traceback = true;
+      if (tracebackLine) ended = TRACEBACK_END.test(content);
+    }
+    if (inherited && entry) {
+      if (!traceback) parsed.level = entry.level;
+      if (traceback && entry.level !== parsed.level) {
+        entry.level = parsed.level;
+        for (let previous = result.length - 1; previous >= 0 && result[previous].entry === entry.entry; previous--) result[previous].level = parsed.level;
+      }
+      parsed.entry = entry.entry;
+      parsed.continuation = true;
+      if (traceback) parsed.format = "traceback";
+    } else {
+      parsed.entry = parsed.lineNumber;
+      parsed.continuation = false;
+      entry = parsed;
+    }
+    if (section) entry = null;
+    workerRecordStart = false;
+    result.push(parsed);
+  }
+  return result;
+}
 
-    return parsed;
-  });
+export function taskLogEntries(lines: ParsedTaskLogLine[]) {
+  const entries: ParsedTaskLogLine[][] = [];
+  for (const line of lines) {
+    const previous = entries.at(-1);
+    if (previous && previous[0].entry === line.entry) previous.push(line);
+    else entries.push([line]);
+  }
+  return entries;
 }
 
 export function appendTaskLog(current: string, next: string, preservePageBoundary = false) {
@@ -232,7 +282,13 @@ function parseLoguruLine(content: string, raw: string, lineNumber: number): Pars
   }
 
   const standard = content.match(LOGURU_STANDARD_LINE);
-  if (!standard) return null;
+  if (!standard) {
+    const message = content.match(LOGURU_MESSAGE_LINE);
+    if (!message) return null;
+    return createLine(raw, lineNumber, {
+      format: "loguru", timestamp: message[1], level: normalizeTaskLogLevel(message[2]), message: message[3]
+    });
+  }
   const [, timestamp, rawLevel, source, message] = standard;
   const sourceParts = parseStandardLoguruSource(source.trim());
   return createLine(raw, lineNumber, {
@@ -281,7 +337,9 @@ function createLine(
     raw,
     source: value.source ?? null,
     sourceLine: value.sourceLine ?? null,
-    timestamp: value.timestamp ?? null
+    timestamp: value.timestamp ?? null,
+    entry: value.entry ?? lineNumber,
+    continuation: value.continuation ?? false
   };
 }
 
@@ -297,7 +355,8 @@ function parseStandardLoguruSource(value: string) {
 
 function splitLogLines(message: string) {
   if (!message) return [];
-  const lines = message.replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "").replace(/\r\n?/g, "\n").split("\n");
+  const ansi = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
+  const lines = message.replace(ansi, "").replace(/\r\n?/g, "\n").split("\n");
   if (lines.at(-1) === "") lines.pop();
   return lines;
 }

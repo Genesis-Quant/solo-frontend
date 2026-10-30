@@ -8,7 +8,7 @@ export const projectKinds = [
   "execution"
 ] as const;
 export type ProjectKind = (typeof projectKinds)[number];
-export type RunStatus = "success" | "running" | "failed";
+export type RunStatus = "success" | "running" | "failed" | "stopped";
 export type PublishStatus = "unpublished" | "checking" | "published" | "failed";
 export type TaskStep = "environment" | "research" | "report";
 
@@ -22,7 +22,10 @@ export interface ResearchVersion {
   id: string;
   number: number;
   packageVersion?: string | null;
-  /** Raw server lifecycle phase (building, queued, running, submit_failed, …). */
+  attempt: number;
+  canStop: boolean;
+  canRetry: boolean;
+  /** Raw server lifecycle phase (building, queued, running, stopping, retrying, …). */
   phase?: string;
   artifactId?: string | null;
   artifact?: ResearchArtifact | null;
@@ -71,16 +74,20 @@ export const kindLabels: Record<ProjectKind, string> = {
 export const runLabels: Record<RunStatus, string> = {
   success: "研究成功",
   running: "运行中",
-  failed: "研究失败"
+  failed: "研究失败",
+  stopped: "已终止"
 };
 
 export const phaseLabels: Record<string, string> = {
   building: "构建中",
   queued: "排队中",
   running: "运行中",
+  stopping: "终止中",
+  retrying: "重试排队中",
   success: "研究成功",
   failed: "研究失败",
-  submit_failed: "提交失败"
+  submit_failed: "提交失败",
+  stopped: "已终止"
 };
 
 export const publishLabels: Record<PublishStatus, string> = {

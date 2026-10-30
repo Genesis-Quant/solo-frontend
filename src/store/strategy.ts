@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { create } from "zustand";
 
 import { client } from "@/assets/lib/request";
-import { strategyActive, type StrategyRecord } from "@/types/strategy";
+import type { StrategyRecord } from "@/types/strategy";
 
 interface StrategyStore {
   records: StrategyRecord[];
@@ -15,9 +15,6 @@ interface StrategyStore {
 
 function reconcileRecord(current: StrategyRecord | undefined, incoming: StrategyRecord, preserveCurrent = false): StrategyRecord {
   if (!current) return incoming;
-  // 同一 ID 是不可重启的一次运行；活动快照不能覆盖已确认的终态。
-  if ((current.status === "success" || current.status === "failed") && strategyActive(incoming.status)) return current;
-  if (strategyActive(current.status) && (incoming.status === "success" || incoming.status === "failed")) return incoming;
   return preserveCurrent ? current : incoming;
 }
 
@@ -38,7 +35,7 @@ export const useStrategyStore = create<StrategyStore>((set, get) => {
         const records = await client.get<StrategyRecord[]>("/strategies");
         if (request !== requestSequence) return;
         set((state) => {
-          // 保留请求期间的逐条写入，但终态仍优先于活动快照；其它记录以列表为准，包括删除。
+          // 保留请求期间的逐条写入；其它记录以列表为准，包括删除。
           const current = new Map(state.records.map((record) => [record.id, record]));
           const modified = new Map(state.records
             .filter((record) => (recordGenerations.get(record.id) ?? 0) > startedAt)

@@ -18,14 +18,15 @@ export function stepState(
   step: TaskStep
 ): "success" | "running" | "failed" | "pending" {
   if (version.status === "success") return "success";
+  if (version.status === "stopped") return "pending";
   if (step === "environment") {
     if (version.phase === "building") return "running";
     if (version.phase === "submit_failed") return "failed";
-    if (version.phase === "queued" || version.phase === "running") return "success";
+    if (["queued", "running", "stopping", "retrying"].includes(version.phase ?? "")) return "success";
     return "pending";
   }
   if (step === "report") return "pending";
-  if (version.phase === "building" || version.phase === "queued" || version.phase === "submit_failed") return "pending";
+  if (["building", "queued", "submit_failed", "retrying"].includes(version.phase ?? "")) return "pending";
   return version.status;
 }
 

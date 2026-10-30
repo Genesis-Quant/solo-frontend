@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { client } from "@/assets/lib/request";
 import { RequestError } from "@/assets/lib/requestError";
+import { useTaskStore } from "@/store/tasks";
 import type { ProjectKind, ResearchProject, ResearchVersion } from "@/types/research";
 
 interface ResearchStore {
@@ -14,31 +15,11 @@ interface ResearchStore {
   upgradeProject: (id: string, schemeVersion: string, algoVersion: string) => Promise<void>;
   removeProject: (id: string, deleteFiles?: boolean) => Promise<void>;
   publishVersion: (projectId: string, versionId: string) => Promise<ResearchVersion>;
+  deleteVersion: (projectId: string, versionId: string) => Promise<void>;
 }
 
 function projectFromApi(project: ResearchProject): ResearchProject {
   return { ...project, updatedAt: new Date(project.updatedAt).toLocaleString("sv-SE").slice(0, 16) };
-}
-
-function reconcileVersion(current: ResearchVersion | undefined, incoming: ResearchVersion): ResearchVersion {
-  // A saved run cannot restart, but publication and artifact state can change independently.
-  // Pre-mutation GETs are already suppressed by loadProjects' generation checks.
-  if (current && current.status !== "running" && current.phase !== "submit_failed" && incoming.status === "running") {
-    return {
-      ...current,
-      publishStatus: incoming.publishStatus,
-      artifactId: incoming.artifactId,
-      artifact: incoming.artifact,
-      files: incoming.files,
-      publishError: incoming.publishError
-    };
-  }
-  return incoming;
-}
-
-function reconcileProject(current: ResearchProject | undefined, incoming: ResearchProject): ResearchProject {
-  const versions = new Map(current?.versions.map((version) => [version.id, version]));
-  return { ...incoming, versions: incoming.versions.map((version) => reconcileVersion(versions.get(version.id), version)) };
 }
 
 export const useResearchStore = create<ResearchStore>((set, get) => {
@@ -66,7 +47,6 @@ export const useResearchStore = create<ResearchStore>((set, get) => {
         const projects = await client.get<ResearchProject[]>("/projects");
         if (request !== requestSequence) return;
         set((state) => {
-          const current = new Map(state.projects.map((project) => [project.id, project]));
           const modified = new Map(state.projects
             .filter((project) => (projectGenerations.get(project.id) ?? 0) > startedAt)
             .map((project) => [project.id, project]));
@@ -77,7 +57,7 @@ export const useResearchStore = create<ResearchStore>((set, get) => {
           return {
             projects: [
               ...Array.from(modified.values()).filter((project) => !serverIds.has(project.id)),
-              ...incoming.map((project) => modified.get(project.id) ?? reconcileProject(current.get(project.id), projectFromApi(project)))
+              ...incoming.map((project) => modified.get(project.id) ?? projectFromApi(project))
             ],
             loaded: true,
             loading: false,
@@ -100,14 +80,14 @@ export const useResearchStore = create<ResearchStore>((set, get) => {
     editProject: async (id, name, description) => {
       const project = projectFromApi(await client.patch<ResearchProject>(`/projects/${id}`, { name, description }));
       markChanged(id);
-      set((state) => ({ projects: state.projects.map((item) => item.id === id ? reconcileProject(item, project) : item) }));
+      set((state) => ({ projects: state.projects.map((item) => item.id === id ? project : item) }));
     },
     upgradeProject: async (id, schemeVersion, algoVersion) => {
       const project = projectFromApi(await client.post<ResearchProject>(`/projects/${id}/upgrade`, {
         scheme_version: schemeVersion, algo_version: algoVersion
       }));
       markChanged(id);
-      set((state) => ({ projects: state.projects.map((item) => item.id === id ? reconcileProject(item, project) : item) }));
+      set((state) => ({ projects: state.projects.map((item) => item.id === id ? project : item) }));
     },
     removeProject: async (id, deleteFiles = true) => {
       try {
@@ -123,9 +103,17 @@ export const useResearchStore = create<ResearchStore>((set, get) => {
       const version = await client.post<ResearchVersion>(`/projects/${projectId}/versions/${versionId}/publish`, {});
       markChanged(projectId);
       set((state) => ({ projects: state.projects.map((project) => project.id === projectId
-        ? { ...project, versions: project.versions.map((current) => current.id === versionId ? reconcileVersion(current, version) : current) }
+        ? { ...project, versions: project.versions.map((current) => current.id === versionId ? version : current) }
         : project) }));
       return version;
+    },
+    deleteVersion: async (projectId, versionId) => {
+      await client.delete(`/projects/${projectId}/versions/${versionId}`);
+      markChanged(projectId);
+      set((state) => ({ projects: state.projects.map((project) => project.id === projectId
+        ? { ...project, versions: project.versions.filter((version) => version.id !== versionId) }
+        : project) }));
+      useTaskStore.getState().forget(versionId);
     }
   };
 });

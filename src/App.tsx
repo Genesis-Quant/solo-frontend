@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { lastPrimaryPage } from "@/store/pageMemory";
 import { useResearchStore } from "@/store/research";
 import { useStrategyStore } from "@/store/strategy";
+import { useTaskStore } from "@/store/tasks";
 import { Alert, AlertDescription } from "@/ui/alert";
 import { Button } from "@/ui/button";
 import { Skeleton } from "@/ui/skeleton";
@@ -36,20 +37,23 @@ function Workbench() {
   const error = useResearchStore((state) => state.error);
   const strategiesLoaded = useStrategyStore((state) => state.loaded);
   const { pathname } = useLocation();
-  const needsStrategies = pathname === "/strategies" || pathname === "/tasks";
-  const needsResearch = pathname.startsWith("/projects/") || pathname === "/tasks";
-  const contentReady = (!needsResearch || loaded && !loading) && (!needsStrategies || strategiesLoaded);
+  const tasksLoaded = useTaskStore((state) => state.loaded);
+  const tasksError = useTaskStore((state) => state.error);
+  const needsStrategies = pathname === "/strategies";
+  const needsResearch = pathname.startsWith("/projects/");
+  const contentReady = (!needsResearch || loaded && !loading) && (!needsStrategies || strategiesLoaded)
+    && (pathname !== "/tasks" || tasksLoaded || !!tasksError);
   useEffect(() => {
     let stopped = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
       if (stopped) return;
-      if (!document.hidden) await load();
+      if (!document.hidden && pathname !== "/tasks") await load();
       if (!stopped) timer = setTimeout(poll, 5000);
     };
     poll();
     return () => { stopped = true; clearTimeout(timer); };
-  }, [load]);
+  }, [load, pathname]);
   return (
     <AppLayout contentReady={contentReady}>
       {needsResearch && loading && !loaded
