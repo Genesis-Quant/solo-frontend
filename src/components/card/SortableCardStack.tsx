@@ -2,6 +2,8 @@ import { GripVertical } from "lucide-react";
 import { Reorder, useDragControls } from "motion/react";
 import { type KeyboardEvent, type PointerEvent, type ReactNode, useEffect, useState } from "react";
 
+import { reconciledOrder, restoredCardOrder, sameOrder } from "@/assets/lib/cardOrder";
+
 export type SortableCard = {
   content: ReactNode;
   id: string;
@@ -10,6 +12,7 @@ export type SortableCard = {
 type SortableCardStackProps = {
   items: SortableCard[];
   storageKey: string;
+  previousDefaultOrder?: string[];
 };
 
 type SortableOrderEventDetail = {
@@ -19,11 +22,11 @@ type SortableOrderEventDetail = {
 
 const sortableOrderEvent = "solo:sortable-card-order";
 
-export default function SortableCardStack({ items, storageKey }: SortableCardStackProps) {
+export default function SortableCardStack({ items, storageKey, previousDefaultOrder }: SortableCardStackProps) {
   const ids = items.map((item) => item.id);
   const idsKey = ids.join("\u0001");
   const content = new Map(items.map((item) => [item.id, item.content]));
-  const [order, setOrder] = useState(() => restoredOrder(storageKey, ids));
+  const [order, setOrder] = useState(() => restoredOrder(storageKey, ids, previousDefaultOrder));
 
   useEffect(() => {
     setOrder((current) => reconciledOrder(current, ids));
@@ -94,23 +97,10 @@ function SortableCardItem({ children, id, onMove }: { children: ReactNode; id: s
   </Reorder.Item>;
 }
 
-function restoredOrder(storageKey: string, ids: string[]) {
+function restoredOrder(storageKey: string, ids: string[], previousDefaultOrder?: string[]) {
   try {
-    const stored = JSON.parse(window.localStorage.getItem(storageKey) ?? "[]");
-    return Array.isArray(stored) && stored.every((item) => typeof item === "string")
-      ? reconciledOrder(stored, ids)
-      : ids;
+    return restoredCardOrder(JSON.parse(window.localStorage.getItem(storageKey) ?? "[]"), ids, previousDefaultOrder);
   } catch {
     return ids;
   }
-}
-
-function reconciledOrder(order: string[], ids: string[]) {
-  const available = new Set(ids);
-  const retained = order.filter((id, index) => available.has(id) && order.indexOf(id) === index);
-  return [...retained, ...ids.filter((id) => !retained.includes(id))];
-}
-
-function sameOrder(left: string[], right: string[]) {
-  return left.length === right.length && left.every((id, index) => id === right[index]);
 }

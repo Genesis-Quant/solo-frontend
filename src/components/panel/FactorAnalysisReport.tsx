@@ -12,6 +12,7 @@ import IconLoaderCircle from "~icons/lucide/loader-circle";
 import { useReportApi } from "@/assets/lib/reports";
 import { chartRange, formatAxisLabel, thresholdMarkLine } from "@/assets/lib/chart";
 import { errorMessage } from "@/assets/lib/utils";
+import { factorDirectionView, type FactorDirection } from "@/assets/lib/factorDirection";
 import {
   FactorAnalytics,
   type DecayPoint,
@@ -35,6 +36,7 @@ type DualChartRanges = { primary?: ChartRange; secondary?: ChartRange };
 type DisplayMetric = { label: string; value: string };
 
 const IC_MOVING_AVERAGE_WINDOW = 22;
+const previousDefaultCardOrder = ["execution-statistics", "information", "returns", "groups", "turnover", "decay"];
 const executionPercentageFormatter = new Intl.NumberFormat("zh-CN", {
   style: "percent",
   maximumFractionDigits: 2
@@ -54,27 +56,34 @@ export default function FactorAnalysisReport({ chartRanges, onChartRanges, param
   const parametersKey = JSON.stringify(parameters);
   const returnColumnsKey = JSON.stringify(parameters.return_columns);
   const scope = useMemo(() => ({ factorApi, parameters, workflowInstanceId }), [factorApi, parametersKey, workflowInstanceId]);
-  const defaults = { scope, factor: parameters.factor_columns[0], returnColumn: parameters.return_columns[0], icType: "RankIC" as IcType };
+  const defaults = { scope, factor: parameters.factor_columns[0], returnColumn: parameters.return_columns[0], icType: "RankIC" as IcType, direction: "original" as FactorDirection };
   const [selection, setSelection] = useState(defaults);
   // 在身份变更的首帧就使用默认值，不让旧选择落到新报告不存在的 Parquet 列。
   const selected = selection.scope === scope ? selection : defaults;
-  const { factor, returnColumn, icType } = selected;
-  const select = (change: Partial<Pick<typeof selected, "factor" | "returnColumn" | "icType">>) => setSelection({ ...selected, ...change });
+  const { factor, returnColumn, icType, direction } = selected;
+  const select = (change: Partial<Pick<typeof selected, "factor" | "returnColumn" | "icType" | "direction">>) => setSelection({ ...selected, ...change });
   const [loaded, setLoaded] = useState<{ scope: typeof scope; session: FactorAnalytics } | null>(null);
   const analytics = loaded?.scope === scope ? loaded.session : null;
-  const [information, setInformation] = useState<InformationPoint[]>([]);
-  const [longShort, setLongShort] = useState<LongShortPoint[]>([]);
-  const [groups, setGroups] = useState<GroupPoint[]>([]);
+  const [rawInformation, setInformation] = useState<InformationPoint[]>([]);
+  const [rawLongShort, setLongShort] = useState<LongShortPoint[]>([]);
+  const [rawGroups, setGroups] = useState<GroupPoint[]>([]);
   const [reverseGroups, setReverseGroups] = useState(false);
-  const displayedGroups = useMemo(() => groupChartPoints(groups, reverseGroups), [groups, reverseGroups]);
-  const [groupStatistics, setGroupStatistics] = useState<GroupStatistic[]>([]);
-  const [decay, setDecay] = useState<DecayPoint[]>([]);
+  const [rawGroupStatistics, setGroupStatistics] = useState<GroupStatistic[]>([]);
+  const [rawDecay, setDecay] = useState<DecayPoint[]>([]);
   const [executionStatistics, setExecutionStatistics] = useState<ExecutionStatisticPoint[]>([]);
   const [turnoverOptions, setTurnoverOptions] = useState<{ session: FactorAnalytics; factor: string; periods: number[] } | null>(null);
   const turnoverPeriods = turnoverOptions?.session === analytics && turnoverOptions.factor === factor ? turnoverOptions.periods : [];
-  const [turnover, setTurnover] = useState<TurnoverSummary | null>(null);
+  const [rawTurnover, setTurnover] = useState<TurnoverSummary | null>(null);
+  const { information, longShort, groups, groupStatistics, decay, turnover } = useMemo(() => factorDirectionView({
+    information: rawInformation, longShort: rawLongShort, groups: rawGroups,
+    groupStatistics: rawGroupStatistics, decay: rawDecay, turnover: rawTurnover
+  }, direction, parameters), [rawInformation, rawLongShort, rawGroups, rawGroupStatistics, rawDecay, rawTurnover, direction, parameters.n_groups, parameters.n_select]);
+  const displayedGroups = useMemo(() => groupChartPoints(groups, reverseGroups), [groups, reverseGroups]);
   const [timeline, setTimeline] = useState<{ session: FactorAnalytics; rows: InformationPoint[] } | null>(null);
-  const rangePoints = useMemo(() => (timeline?.session === analytics ? timeline.rows : []).map((row) => ({ time: row.time, value: icType === "RankIC" ? row.rankIc : row.ic })), [analytics, icType, timeline]);
+  const rangePoints = useMemo(() => (timeline?.session === analytics ? timeline.rows : []).map((row) => {
+    const value = icType === "RankIC" ? row.rankIc : row.ic;
+    return { time: row.time, value: value === null ? null : value * (direction === "inverted" ? -1 : 1) };
+  }), [analytics, direction, icType, timeline]);
   const minimumDate = rangePoints[0]?.time ?? "";
   const maximumDate = rangePoints.at(-1)?.time ?? "";
   const [dateRange, setDateRange] = useState<{ scope: typeof scope; start: string; end: string } | null>(null);
@@ -312,28 +321,23 @@ export default function FactorAnalysisReport({ chartRanges, onChartRanges, param
       onReset={() => setDateRange({ scope, start: minimumDate, end: maximumDate })}
     />
 
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3" role="group" aria-label="报告筛选">
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" role="group" aria-label="报告筛选">
       <ReportSelect label="因子" value={factor} options={parameters.factor_columns} onChange={(value) => select({ factor: value })} />
       <ReportSelect label="收益率" value={returnColumn} options={parameters.return_columns} onChange={(value) => select({ returnColumn: value })} />
       <ReportSelect label="IC 类型" value={icType} options={["RankIC", "IC"]} onChange={(value) => select({ icType: value as IcType })} />
+      <ReportSelect label="因子方向" value={direction === "inverted" ? "取反" : "原始"} options={["原始", "取反"]} onChange={(value) => select({ direction: value === "取反" ? "inverted" : "original" })} />
     </div>
+    {direction === "inverted" && <p className="text-xs leading-5 text-muted-foreground" aria-label="因子取反说明">
+      使用已有 Parquet 取反：IC、RankIC 和多空收益变号，分组与最大/最小组合交换，换手随组合交换；秩自相关和 DSL 执行统计不变。
+      这是反转已保存组合，不重新计算逐股分组；样本不能均分或存在并列值时，可能与逐股因子乘 −1 后重跑不同。不修改原始文件或启动任务。
+    </p>}
     <ReturnContract spec={returnSpec} />
     <LaggedReturnNotice specs={parameters.return_specs} />
 
     <SortableCardStack
       storageKey="solo.arena.factor-analysis.overview-card-order"
+      previousDefaultOrder={previousDefaultCardOrder}
       items={[
-        {
-          id: "execution-statistics",
-          content: <ReportCard title="DSL 执行统计">
-            <p className="text-xs leading-5 text-muted-foreground">仅按报告日期区间筛选，不随因子、收益率或 IC 类型变化。区域总上沿是当日过滤前股票数；色带从上到下按实际过滤顺序展示剔除数量，底部为最终截面。比例均以原始股票数为基准。</p>
-            <ChartPanel title="每日股票域与过滤去向">
-              <SeriesContent error={outputErrors.executionStatistics || executionStatisticsError} loading={executionStatisticsLoading} count={executionStatistics.length} height={360}>
-                {executionStatistics.length > 0 && <EChart option={executionStatisticsOption(executionStatistics, theme, chartRanges?.executionStatistics)} height={360} />}
-              </SeriesContent>
-            </ChartPanel>
-          </ReportCard>
-        },
         {
           id: "information",
           content: <ReportCard title="IC 分析">
@@ -392,6 +396,17 @@ export default function FactorAnalysisReport({ chartRanges, onChartRanges, param
             <SummaryTiles items={decaySummary(decay, icType)} />
             <ChartPanel title={`${icType} 均值衰减`}>
               <SeriesContent loading={decayLoading} count={decay.length} height={330}>{decay.length > 0 && <EChart option={decayOption(decay, theme, icType, returnColumn, chartRanges?.decay)} height={330} />}</SeriesContent>
+            </ChartPanel>
+          </ReportCard>
+        },
+        {
+          id: "execution-statistics",
+          content: <ReportCard title="DSL 执行统计">
+            <p className="text-xs leading-5 text-muted-foreground">仅按报告日期区间筛选，不随因子、收益率、IC 类型或因子方向变化。区域总上沿是当日过滤前股票数；色带从上到下按实际过滤顺序展示剔除数量，底部为最终截面。比例均以原始股票数为基准。</p>
+            <ChartPanel title="每日股票域与过滤去向">
+              <SeriesContent error={outputErrors.executionStatistics || executionStatisticsError} loading={executionStatisticsLoading} count={executionStatistics.length} height={360}>
+                {executionStatistics.length > 0 && <EChart option={executionStatisticsOption(executionStatistics, theme, chartRanges?.executionStatistics)} height={360} />}
+              </SeriesContent>
             </ChartPanel>
           </ReportCard>
         }
